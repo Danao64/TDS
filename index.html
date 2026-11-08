@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Planning TDS — génération et équité</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Planning TDS</h1>
+    <nav id="tabs">
+      <button data-tab="planning" class="active">Planning</button>
+      <button data-tab="stats">Statistiques</button>
+      <button data-tab="requests">Demandes</button>
+      <button data-tab="params">Paramètres</button>
+      <button data-tab="data">Données</button>
+    </nav>
+  </header>
+  <main>
+    <div id="toast" hidden></div>
+    <section id="tab-planning"></section>
+    <section id="tab-stats" hidden></section>
+    <section id="tab-requests" hidden></section>
+    <section id="tab-params" hidden></section>
+    <section id="tab-data" hidden></section>
+  </main>
+  <footer>Les données restent dans votre navigateur (aucun envoi sur un serveur). Pensez à exporter une sauvegarde JSON régulièrement.</footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="planner.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
