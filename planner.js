@@ -7,7 +7,8 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  /* ---------- Tableaux horaires (feuille DATA : « NORMALE AVEC TDS OPTION 1 ») ---------- */
+  /* ---------- Tableaux horaires (note de service TDS LFBO, vacations élémentaires J1-1 … J3-10) ----------
+   * Période d'option (avec J0 / JE), pages 3 à 5 : grille « NORMALE AVEC TDS OPTION 1 ». */
   const DEFAULT_TABLES = {
     weekday: {
       J1: ['07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '06:00-15:00', '08:00-16:00', '07:00-15:00', '07:00-15:00', '07:00-15:00'],
@@ -25,6 +26,34 @@
       J3: ['20:00-07:00', '20:00-07:00', '20:00-07:00', '16:00-00:00', '16:30-00:00', '17:00-00:00', '16:00-00:00', '16:00-00:00', '16:00-00:00', '16:00-00:00']
     }
   };
+
+  // Période creuse (hors période d'option, « TDS socle hors option 1 »), pages 6 à 8.
+  const DEFAULT_TABLES_CREUSE = {
+    weekday: {
+      J1: ['07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '06:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00'],
+      J2: ['11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '10:00-19:00', '09:00-18:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00'],
+      J3: ['20:00-07:00', '20:00-07:00', '20:00-07:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00']
+    },
+    saturday: {
+      J1: ['07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '08:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00'],
+      J2: ['11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '08:00-17:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00'],
+      J3: ['20:00-07:00', '20:00-07:00', '20:00-07:00', '15:00-00:00', '16:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00']
+    },
+    sunday: {
+      J1: ['07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '08:00-16:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00', '07:00-15:00'],
+      J2: ['11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '08:30-16:00', '11:00-20:00', '11:00-20:00', '11:00-20:00', '11:00-20:00'],
+      J3: ['20:00-07:00', '20:00-07:00', '20:00-07:00', '15:00-00:00', '17:00-00:00', '16:30-23:30', '15:00-00:00', '15:00-00:00', '15:00-00:00', '15:00-00:00']
+    }
+  };
+  // Grille du jour : période d'option → cfg.tables ; sinon période creuse → cfg.tablesCreuse.
+  function tablesFor(cfg, k) {
+    return inPeriods(k, cfg.cycle && cfg.cycle.optionPeriods) ? cfg.tables : (cfg.tablesCreuse || DEFAULT_TABLES_CREUSE);
+  }
+  // Horaire du J0 (JE de la note de service) : 10h00-18h30 du lundi au samedi, 10h00-18h00 le dimanche et les fériés.
+  function j0RangeFor(cfg, dt) {
+    return dt === 'sunday' ? (cfg.j0RangeSunday || '10:00-18:00') : (cfg.j0Range || '10:00-18:30');
+  }
+  function periodOf(cfg, k) { return inPeriods(k, cfg.cycle && cfg.cycle.optionPeriods) ? 'option' : 'creuse'; }
 
   const DAY_TYPE_LABEL = { weekday: 'Lundi–vendredi', saturday: 'Samedi', sunday: 'Dimanche / férié' };
 
@@ -331,7 +360,7 @@
     function solve(k, dt, kind, avail, fixedList, opts) {
       opts = opts || {};
       const out = { items: [], warnings: [] };
-      const table = cfg.tables[dt][kind], n = avail.length;
+      const table = tablesFor(cfg, k)[dt][kind], n = avail.length;
       const rangeOf = function (rank) { return table[Math.min(rank, table.length) - 1]; };
       if (n > table.length) out.warnings.push('Plus d\'agents (' + n + ') que d\'horaires définis (' + table.length + ') : le dernier horaire est répété.');
       const slots = [];
@@ -427,7 +456,7 @@
     for (let k = from; k <= to; k = addDays(k, 1)) {
       const dt = dayType(k, hol);
       const role = roles[k] || 'OFF';
-      const day = { date: k, dayType: dt, role: role, assign: {}, absent: {}, prefs: [], warnings: [], lockedAgents: {}, cdt: {} };
+      const day = { date: k, dayType: dt, role: role, period: periodOf(cfg, k), assign: {}, absent: {}, prefs: [], warnings: [], lockedAgents: {}, cdt: {} };
       days.push(day);
       byDate[k] = day;
       if (role === 'OFF') continue;
@@ -480,12 +509,12 @@
         const pick = imposed.length ? imposed[0] : cands[0];
         if (n1ids.indexOf(pick) >= 0) day.warnings.push('J0 de ' + pick + ' après sa N1 du ' + j3.date + (imposed.length ? ' (créneau imposé).' : ' (aucun autre agent disponible).'));
         if (wants(pick, 'EVITE')) day.warnings.push('Évitement J0 non respecté pour ' + pick + ' (pas d\'autre agent disponible ou écart de J0 trop important).');
-        applyAssign(day, pick, 'J0', 1, cfg.j0Range || '10:00-18:30');
+        applyAssign(day, pick, 'J0', 1, j0RangeFor(cfg, dt));
         continue;
       }
 
       const kind = role; // J1 | J2 | J3
-      const table = cfg.tables[dt][kind], n = avail.length;
+      const table = tablesFor(cfg, k)[dt][kind], n = avail.length;
       if (n === 0) { day.warnings.push('Aucun agent disponible.'); continue; }
       if (n < cfg.minStaff) day.warnings.push('Effectif de ' + n + ' < minimum ' + cfg.minStaff + '.');
       if (kind === 'J3' && n < cfg.nightCount) day.warnings.push('Seulement ' + n + ' agent(s) pour ' + cfg.nightCount + ' postes de nuit.');
@@ -783,7 +812,7 @@
 
   return {
     buildLeaveMail: buildLeaveMail,
-    DEFAULT_TABLES: DEFAULT_TABLES, DEFAULT_WEIGHTS: DEFAULT_WEIGHTS, DAY_TYPE_LABEL: DAY_TYPE_LABEL,
+    DEFAULT_TABLES: DEFAULT_TABLES, DEFAULT_TABLES_CREUSE: DEFAULT_TABLES_CREUSE, tablesFor: tablesFor, periodOf: periodOf, j0RangeFor: j0RangeFor, DEFAULT_WEIGHTS: DEFAULT_WEIGHTS, DAY_TYPE_LABEL: DAY_TYPE_LABEL,
     parseRange: parseRange, fmtRange: fmtRange, parseKey: parseKey, toKey: toKey, addDays: addDays, dow: dow,
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,

@@ -17,12 +17,13 @@
       cfg: {
         agents: ['AG1', 'AG2', 'AG3', 'AG4', 'AG5', 'AG6'].map(function (id, i) { return { id: id, renfort: false, cdt: i < 2, reg: i }; }),
         tables: JSON.parse(JSON.stringify(P.DEFAULT_TABLES)),
+        tablesCreuse: JSON.parse(JSON.stringify(P.DEFAULT_TABLES_CREUSE)),
         cycle: {
           anchor: '2027-01-01',
           normal: ['J1', 'J2', 'J3', 'OFF', 'OFF', 'OFF'],
           optionPeriods: []
         },
-        holidays: [], minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j2EarlyMax: '10:00', absenceCredit: 1,
+        holidays: [], minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j0RangeSunday: '10:00-18:00', j2EarlyMax: '10:00', absenceCredit: 1,
         weights: Object.assign({}, P.DEFAULT_WEIGHTS)
       },
       initial: {}, requests: [], months: {}
@@ -42,6 +43,8 @@
     if (state.cfg.weights && state.cfg.weights.night === 4) { state.cfg.weights.night = P.DEFAULT_WEIGHTS.night; migrated = true; }
     state.weightsVersion = 2;
   }
+  if (!state.cfg.j0RangeSunday) state.cfg.j0RangeSunday = '10:00-18:00'; // J0 du dimanche / férié (note de service)
+  if (!state.cfg.tablesCreuse) state.cfg.tablesCreuse = JSON.parse(JSON.stringify(P.DEFAULT_TABLES_CREUSE)); // grilles de période creuse (ajout)
   delete state.cfg.equityPeriod; // ancien réglage « remise à zéro annuelle », retiré : les compteurs sont toujours cumulés
   function save() {
     state.changedAt = Date.now();
@@ -197,7 +200,11 @@
     html += '<label style="flex-direction:row;align-items:center;gap:6px;color:var(--ink)"><input type="checkbox" id="pl-option"' + (opt ? ' checked' : '') + '> Mois en période d\'option (J0 sur le dernier OFF avant chaque J1)</label></div>';
     if (!(state.cfg.cycle.optionPeriods || []).length) html += '<p class="warn">Aucune période d\'option définie : le planning ne contient donc aucun J0. Cochez la case ci-dessus pour ce mois, ou définissez les périodes dans Paramètres.</p>';
     if (mm && mm.stale) html += '<p class="warn">⚠ Ce mois est à régénérer : ' + esc(staleReason(ui.month)) + '.</p>';
-    html += '<p class="muted">Cycle ancré au ' + esc(state.cfg.cycle.anchor) + ' · effectif minimum ' + state.cfg.minStaff + ' · ' + state.cfg.agents.length + ' agents. <span class="ico-chip">' + ICON_N1 + '</span> = N1, <span class="ico-chip">' + ICON_MEAL + '</span> = repas, ❄ = journée figée. Les vacations 🔒 (échange manuel) sont conservées à la régénération.</p></div>';
+    const per = (function () { // période(s) couvertes par le mois : grille horaire utilisée
+      const set = {}; for (let k = rg[0]; k <= rg[1]; k = P.addDays(k, 1)) set[P.periodOf(state.cfg, k)] = true;
+      return set.option && set.creuse ? 'période d\'option et période creuse (grille selon le jour)' : set.option ? 'période d\'option (grille avec J0)' : 'période creuse';
+    })();
+    html += '<p class="muted"><b>Horaires : ' + per + '.</b> Cycle ancré au ' + esc(state.cfg.cycle.anchor) + ' · effectif minimum ' + state.cfg.minStaff + ' · ' + state.cfg.agents.length + ' agents. <span class="ico-chip">' + ICON_N1 + '</span> = N1, <span class="ico-chip">' + ICON_MEAL + '</span> = repas, ❄ = journée figée. Les vacations 🔒 (échange manuel) sont conservées à la régénération.</p></div>';
     if (!mm) {
       el.innerHTML = html + '<p class="muted">Aucun planning pour ce mois. Vérifiez les paramètres et les demandes, puis cliquez sur « Générer le mois ».</p>';
       bindPlanning(); return;
@@ -827,7 +834,8 @@
     h += '<div class="card"><h2 style="margin-top:0">Règles et pondérations</h2><div class="row">' +
       '<label>Effectif minimum<input type="number" id="p-min" min="1" value="' + c.minStaff + '"></label>' +
       '<label>Postes de nuit effective (J3)<input type="number" id="p-nights" min="0" value="' + c.nightCount + '"></label>' +
-      '<label>Horaire du J0<input id="p-j0" value="' + esc(c.j0Range) + '"></label>' +
+      '<label>Horaire du J0 (lundi-samedi)<input id="p-j0" value="' + esc(c.j0Range) + '"></label>' +
+      '<label>Horaire du J0 (dimanche, férié)<input id="p-j0sun" value="' + esc(c.j0RangeSunday || '10:00-18:00') + '"></label>' +
       '<label>J2 « tôt » : début au plus tard à<input id="p-j2early" size="6" value="' + esc(c.j2EarlyMax || '10:00') + '"></label>' +
       '<label>Crédit d\'absence pour l\'équité (0 à 1)<input type="number" id="p-abscredit" step="0.1" min="0" max="1" style="width:90px" value="' + (c.absenceCredit === undefined ? 1 : c.absenceCredit) + '"></label>' +
       '<label>Nuits max. par agent et par mois<input type="number" id="p-maxnights" min="1" style="width:90px" value="' + P.caps(c).nights + '"></label>' +
@@ -838,8 +846,10 @@
       '</div><p class="muted">Crédit d\'absence : à 1, un jour d\'absence (congé, récup…) compte comme un jour de présence pour l\'équité des nuits, N1, repas, soirées, etc. : un agent absent rattrape ensuite son retard ; à 0, seule la présence compte. Les heures ne sont pas concernées. Plus le poids est élevé, plus l\'algorithme évite de charger un agent déjà au-dessus du taux d\'équipe sur ce critère. Le poids « souhait » doit rester élevé pour que les demandes soient prioritaires sur l\'équité.</p>' +
       '<p class="muted">Rythme de rattrapage : l\'équité se fait sur l\'année entière, pas en un mois. Un agent en retard (congés, absence) rattrape au plus jusqu\'au plafond de nuits du mois, et une seule N1 par mois ; une 2e N1 n\'est donnée qu\'exceptionnellement (son poids la rend coûteuse), jamais au-delà du plafond. Un dépassement inévitable (effectif insuffisant) est signalé en alerte.</p>' +
       '<p class="muted">Les compteurs ne sont jamais remis à zéro au 1er janvier : un retard de fin d\'année (congés en novembre-décembre) se rattrape au début de l\'année suivante, au même rythme plafonné.</p></div>';
-    h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires (JSON)</h2><textarea id="p-tables" rows="14">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
-      '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 ».</p></div>';
+    h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période creuse (JSON)</h2><textarea id="p-tables-creuse" rows="12">' + esc(JSON.stringify(c.tablesCreuse || P.DEFAULT_TABLES_CREUSE, null, 1)) + '</textarea>' +
+      '<p class="muted">Utilisés hors période d\'option (cycle J1 J2 J3 Repos Repos Repos). Valeurs par défaut : note de service TDS LFBO, « TDS socle hors option 1 », pages 6 à 8.</p></div>';
+    h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période d\'option (JSON)</h2><textarea id="p-tables" rows="12">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
+      '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Utilisés pendant la période d\'option (avec J0). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 », note de service TDS LFBO, pages 3 à 5.</p></div>';
     h += '<button class="btn" data-act="params-save">Enregistrer les paramètres</button>';
     $('#tab-params').innerHTML = h;
   }
@@ -882,18 +892,23 @@
       if (periods.some(function (p) { return p.to < FIRST_DAY; })) throw new Error('période d\'option antérieure à janvier 2027.');
       periods.forEach(function (p) { if (p.from < FIRST_DAY) p.from = FIRST_DAY; });
       const hol = ($('#p-hol').value.match(/\d{4}-\d{2}-\d{2}/g) || []).filter(function (k) { return k >= FIRST_DAY; });
-      const tables = JSON.parse($('#p-tables').value);
-      ['weekday', 'saturday', 'sunday'].forEach(function (dt) {
-        ['J1', 'J2', 'J3'].forEach(function (k) {
-          if (!tables[dt] || !Array.isArray(tables[dt][k]) || !tables[dt][k].length) throw new Error('Tableau horaire manquant : ' + dt + ' / ' + k);
-          tables[dt][k].forEach(function (r) { P.parseRange(r); });
+      const readTables = function (sel, label) {
+        let t;
+        try { t = JSON.parse($(sel).value); } catch (err) { throw new Error('tableaux horaires « ' + label + ' » : JSON invalide.'); }
+        ['weekday', 'saturday', 'sunday'].forEach(function (dt) {
+          ['J1', 'J2', 'J3'].forEach(function (k) {
+            if (!t[dt] || !Array.isArray(t[dt][k]) || !t[dt][k].length) throw new Error('Tableau horaire « ' + label + ' » manquant : ' + dt + ' / ' + k);
+            t[dt][k].forEach(function (r) { P.parseRange(r); });
+          });
         });
-      });
-      P.parseRange($('#p-j0').value);
+        return t;
+      };
+      const tables = readTables('#p-tables', 'période d\'option'), tablesCreuse = readTables('#p-tables-creuse', 'période creuse');
+      P.parseRange($('#p-j0').value); P.parseRange($('#p-j0sun').value);
       const j2e = $('#p-j2early').value.trim().replace(/h/i, ':');
       if (!/^\d{1,2}:\d{2}$/.test(j2e)) throw new Error('Heure « J2 tôt » invalide (ex. 10:00).');
       const weights = {}; $$('[data-w]').forEach(function (i) { weights[i.dataset.w] = parseFloat(i.value) || 0; });
-      Object.assign(c, { agents: agents, tables: tables, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
+      Object.assign(c, { agents: agents, tables: tables, tablesCreuse: tablesCreuse, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j0RangeSunday: $('#p-j0sun').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
       c.cycle = { anchor: anchor, normal: normal, optionPeriods: periods };
       state.initial = initial;
       const renamed = old.filter(function (id) { return !seen.has(id); });

@@ -69,6 +69,14 @@ all.filter(d => d.role === 'J3' && Object.keys(d.assign).length).forEach(d => {
   nights++;
 });
 
+// ---- horaire du J0 : 10h00-18h30 du lundi au samedi, 10h00-18h00 le dimanche / férié
+{
+  const j0s = all.filter(d => d.role === 'J0' && Object.keys(d.assign).length);
+  j0s.forEach(d => { const a = Object.values(d.assign)[0]; assert.strictEqual(a.range, d.dayType === 'sunday' ? '10:00-18:00' : '10:00-18:30', 'horaire J0 ' + d.date); });
+  assert(j0s.some(d => d.dayType === 'sunday') && j0s.some(d => d.dayType !== 'sunday'), 'J0 en semaine et le dimanche dans l\'année simulée');
+  console.log('J0 : ' + j0s.filter(d => d.dayType === 'sunday').length + ' dimanche(s) / férié(s) en 10h00-18h00, ' + j0s.filter(d => d.dayType !== 'sunday').length + ' autres en 10h00-18h30');
+}
+
 // ---- J0 jamais attribué à l'agent N1 du J3 du même cycle (sauf alerte)
 let j0n = 0;
 all.filter(d => d.role === 'J0').forEach(d => {
@@ -168,6 +176,22 @@ all.filter(d => d.role === 'J3').forEach(d => {
   assert(twoN1 <= 2, '2e N1 du mois trop fréquente');
   assert(Math.max(...natMonths) <= 3);
   assert(natDev > -2, 'B4 doit avoir rattrapé l\'essentiel de ses nuits sur l\'année');
+}
+
+// ---- grilles horaires : période creuse hors période d'option (juin-septembre ici), grille d'option pendant
+{
+  let creuse = 0, option = 0;
+  all.forEach(d => {
+    if (d.role !== 'J1' && d.role !== 'J2' && d.role !== 'J3') return;
+    const inOpt = d.date >= '2027-06-01' && d.date <= '2027-09-30';
+    const grid = inOpt ? P.DEFAULT_TABLES : P.DEFAULT_TABLES_CREUSE;
+    assert.strictEqual(d.period, inOpt ? 'option' : 'creuse', 'période ' + d.date);
+    Object.values(d.assign).forEach(a => assert.strictEqual(a.range, grid[d.dayType][a.kind][a.rank - 1], 'horaire ' + d.date + ' ' + a.slot));
+    if (inOpt) option++; else creuse++;
+  });
+  assert(creuse > 0 && option > 0);
+  assert.strictEqual(P.periodOf(cfg, '2027-05-31'), 'creuse'); assert.strictEqual(P.periodOf(cfg, '2027-06-01'), 'option');
+  console.log('grilles : ' + creuse + ' jours en période creuse, ' + option + ' en période d\'option, horaires conformes');
 }
 
 // ---- contrôle d'effectif des demandes (avant génération)

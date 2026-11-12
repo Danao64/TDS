@@ -22,6 +22,10 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 4. **Statistiques** : cumul par agent (heures, nuits, soirées, nuits WE/férié, J2 tardifs, débuts tôt, J0…) avec écart au taux d'équipe.
 5. **Données** : sauvegarde / restauration JSON. Générez les mois dans l'ordre : chaque mois s'appuie sur les compteurs des précédents.
 
+**Horaire du J0** (JE de la note de service) : 10h00-18h30 du lundi au samedi, **10h00-18h00 le dimanche et les jours fériés** ; les deux horaires sont réglables dans Paramètres.
+
+**Grilles horaires** : pendant une période d'option (J0), les horaires sont ceux de la grille « NORMALE AVEC TDS OPTION 1 » (note de service TDS LFBO, pages 3 à 5). **Tout jour hors période d'option est en période creuse** et utilise la grille « TDS socle hors option 1 » (pages 6 à 8 : J1 07h00-15h00, J2 11h00-20h00, nuits 20h00-07h00, soirées 15h00-00h00, avec les variantes du samedi et du dimanche / férié). Les deux grilles sont modifiables dans Paramètres ; le bandeau d'infos du Planning indique la période du mois affiché.
+
 Les **périodes d'option** se saisissent dans Paramètres, une par ligne, date de début puis date de fin au format JJ/MM/AAAA (ex. `01/06/2027 30/09/2027`).
 
 Le planning commence en **janvier 2027** : aucun mois ni aucune date antérieurs ne sont acceptés (menu des mois, flèche ◀, dates des demandes et du mail, date d'ancrage, périodes d'option, import). Les compteurs de départ de chaque agent se saisissent à la main dans Paramètres.
