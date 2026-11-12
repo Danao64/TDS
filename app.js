@@ -40,6 +40,7 @@
     if (state.cfg.weights && state.cfg.weights.night === 4) { state.cfg.weights.night = P.DEFAULT_WEIGHTS.night; migrated = true; }
     state.weightsVersion = 2;
   }
+  delete state.cfg.equityPeriod; // ancien réglage « remise à zéro annuelle », retiré : les compteurs sont toujours cumulés
   function save() {
     state.changedAt = Date.now();
     try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { toast('Sauvegarde locale impossible : ' + e.message); }
@@ -87,14 +88,9 @@
   function daysBefore(month) {
     return sortedMonths().filter(function (m) { return m < month; }).reduce(function (acc, m) { return acc.concat(state.months[m].days); }, []);
   }
-  // Équité par année civile (par défaut) : les compteurs repartent à zéro chaque 1er janvier ; les compteurs
-  // initiaux (Paramètres) ne valent que pour l'année de la date d'ancrage. Sinon, cumul continu depuis le début.
-  function yearly() { return state.cfg.equityPeriod !== 'continuous'; }
-  function countersBefore(month) {
-    if (!yearly()) return P.computeCounters(daysBefore(month), state.cfg, initialCounters());
-    const y = month.slice(0, 4), days = daysBefore(month).filter(function (d) { return d.date.slice(0, 4) === y; });
-    return P.computeCounters(days, state.cfg, y === state.cfg.cycle.anchor.slice(0, 4) ? initialCounters() : {});
-  }
+  // Compteurs cumulés en continu depuis le début (compteurs initiaux + tous les mois précédents) :
+  // jamais de remise à zéro au 1er janvier, un retard de fin d'année se rattrape l'année suivante.
+  function countersBefore(month) { return P.computeCounters(daysBefore(month), state.cfg, initialCounters()); }
   function statsFor(month) {
     const before = countersBefore(month);
     const after = P.computeCounters(state.months[month].days, state.cfg, before);
@@ -371,7 +367,7 @@
     if ($('#sw-b').options.length > 1) $('#sw-b').selectedIndex = 1;
     suggestSwaps();
   }
-  // Suggestions : avec qui l'agent A peut échanger ce jour-là en déséquilibrant le moins les compteurs (cumul de la période d'équité).
+  // Suggestions : avec qui l'agent A peut échanger ce jour-là en déséquilibrant le moins les compteurs (compteurs cumulés).
   function suggestSwaps() {
     const box = $('#sw-suggest'), mm = state.months[ui.month]; if (!box || !mm) return;
     const d = mm.days.find(function (x) { return x.date === $('#sw-day').value; }), a = $('#sw-a').value;
@@ -548,7 +544,7 @@
     const labels = COUNTER_FIELDS.concat([['days', 'Jours travaillés'], ['weDays', 'Jours WE/férié']]);
     let h = '<div class="card"><div class="row"><label>Cumul jusqu\'à la fin de<select id="st-month">' +
       months.map(function (m) { return '<option' + (m === ui.statMonth ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></label></div>' +
-      '<p class="muted">' + (yearly() ? 'Cumul depuis le 1er janvier ' + ui.statMonth.slice(0, 4) + ' (équité par année civile)' + (ui.statMonth.slice(0, 4) === state.cfg.cycle.anchor.slice(0, 4) ? ', compteurs initiaux compris' : '') : 'Cumul = compteurs initiaux + tous les mois générés jusqu\'au mois choisi') + '. Sous chaque valeur : « ce mois » et l\'écart au taux d\'équipe rapporté aux jours travaillés (rouge = trop chargé, bleu = moins chargé).</p></div>';
+      '<p class="muted">Cumul = compteurs initiaux + tous les mois générés jusqu\'au mois choisi (pas de remise à zéro au 1er janvier). Sous chaque valeur : « ce mois » et l\'écart au taux d\'équipe rapporté aux jours travaillés (rouge = trop chargé, bleu = moins chargé).</p></div>';
     h += '<div class="card" style="overflow:auto"><table class="stats" style="width:100%"><thead><tr><th>Agent</th>' + labels.map(function (l) { return '<th>' + l[1] + '</th>'; }).join('') + '<th>Souhaits OK / KO</th><th>Jours d\'absence</th></tr></thead><tbody>';
     sortedAgents().forEach(function (a) {
       const c = st.after[a.id], b = st.before[a.id];
@@ -827,7 +823,6 @@
       '<label>Horaire du J0<input id="p-j0" value="' + esc(c.j0Range) + '"></label>' +
       '<label>J2 « tôt » : début au plus tard à<input id="p-j2early" size="6" value="' + esc(c.j2EarlyMax || '10:00') + '"></label>' +
       '<label>Crédit d\'absence pour l\'équité (0 à 1)<input type="number" id="p-abscredit" step="0.1" min="0" max="1" style="width:90px" value="' + (c.absenceCredit === undefined ? 1 : c.absenceCredit) + '"></label>' +
-      '<label>Équité calculée<select id="p-equity"><option value="year"' + (c.equityPeriod !== 'continuous' ? ' selected' : '') + '>par année civile (remise à zéro au 1er janvier)</option><option value="continuous"' + (c.equityPeriod === 'continuous' ? ' selected' : '') + '>en continu, d\'une année sur l\'autre</option></select></label>' +
       '<label>Nuits max. par agent et par mois<input type="number" id="p-maxnights" min="1" style="width:90px" value="' + P.caps(c).nights + '"></label>' +
       '<label>N1 max. par agent et par mois<input type="number" id="p-maxn1" min="1" style="width:90px" value="' + P.caps(c).n1 + '"></label></div><div class="row" style="margin-top:10px">' +
       [['hours', 'Heures (par h)'], ['night', 'Nuit'], ['evening', 'Soirée J3'], ['late', 'J2 tardif'], ['early', 'Début tôt'], ['nightWE', 'Nuit WE/férié'], ['n1', 'N1 🌙 (par écart)'], ['meal', 'Repas 🍽️ (par écart)'], ['n1Extra', '2e N1 du mois (exceptionnelle)'], ['j2tot', 'J2 tôt avant une nuit'], ['pref', 'Souhait / évitement']].map(function (x) {
@@ -835,7 +830,7 @@
       }).join('') +
       '</div><p class="muted">Crédit d\'absence : à 1, un jour d\'absence (congé, récup…) compte comme un jour de présence pour l\'équité des nuits, N1, repas, soirées, etc. : un agent absent rattrape ensuite son retard ; à 0, seule la présence compte. Les heures ne sont pas concernées. Plus le poids est élevé, plus l\'algorithme évite de charger un agent déjà au-dessus du taux d\'équipe sur ce critère. Le poids « souhait » doit rester élevé pour que les demandes soient prioritaires sur l\'équité.</p>' +
       '<p class="muted">Rythme de rattrapage : l\'équité se fait sur l\'année entière, pas en un mois. Un agent en retard (congés, absence) rattrape au plus jusqu\'au plafond de nuits du mois, et une seule N1 par mois ; une 2e N1 n\'est donnée qu\'exceptionnellement (son poids la rend coûteuse), jamais au-delà du plafond. Un dépassement inévitable (effectif insuffisant) est signalé en alerte.</p>' +
-      '<p class="muted">Équité par année civile : chaque 1er janvier, tous les compteurs repartent à zéro et tout le monde recommence à égalité ; un retard non rattrapé en décembre est abandonné. En continu : le retard est reporté sur l\'année suivante. Les compteurs initiaux ci-dessus ne valent que pour la première année (celle de la date d\'ancrage).</p></div>';
+      '<p class="muted">Les compteurs ne sont jamais remis à zéro au 1er janvier : un retard de fin d\'année (congés en novembre-décembre) se rattrape au début de l\'année suivante, au même rythme plafonné.</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires (JSON)</h2><textarea id="p-tables" rows="14">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
       '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 ».</p></div>';
     h += '<button class="btn" data-act="params-save">Enregistrer les paramètres</button>';
@@ -882,7 +877,7 @@
       const j2e = $('#p-j2early').value.trim().replace(/h/i, ':');
       if (!/^\d{1,2}:\d{2}$/.test(j2e)) throw new Error('Heure « J2 tôt » invalide (ex. 10:00).');
       const weights = {}; $$('[data-w]').forEach(function (i) { weights[i.dataset.w] = parseFloat(i.value) || 0; });
-      Object.assign(c, { agents: agents, tables: tables, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), equityPeriod: $('#p-equity').value === 'continuous' ? 'continuous' : 'year', weights: weights });
+      Object.assign(c, { agents: agents, tables: tables, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
       c.cycle = { anchor: anchor, normal: normal, optionPeriods: periods };
       state.initial = initial;
       const renamed = old.filter(function (id) { return !seen.has(id); });
