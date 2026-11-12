@@ -205,7 +205,8 @@
       const set = {}; for (let k = rg[0]; k <= rg[1]; k = P.addDays(k, 1)) set[P.periodOf(state.cfg, k)] = true;
       return set.option && set.creuse ? 'période d\'option et période creuse (grille selon le jour)' : set.option ? 'période d\'option (grille avec J0)' : 'période creuse';
     })();
-    html += '<p class="muted"><b>Horaires : ' + per + '.</b> Cycle ancré au ' + esc(state.cfg.cycle.anchor) + ' · effectif minimum ' + state.cfg.minStaff + ' · ' + state.cfg.agents.length + ' agents. <span class="ico-chip">' + ICON_N1 + '</span> = N1, <span class="ico-chip">' + ICON_MEAL + '</span> = repas, ❄ = journée figée. Les vacations 🔒 (échange manuel) sont conservées à la régénération.</p></div>';
+    const degN = mm ? mm.days.filter(function (d) { const bc = dayBc(d); return bc !== null && Object.keys(d.assign).length && Object.keys(d.assign).length < bc; }).length : 0;
+    html += '<p class="muted"><b>Horaires : ' + per + '.</b>' + (mm ? ' Sous chaque vacation : présents / BC (besoin de couverture) ; ' + (degN ? '<span class="deg">' + degN + ' vacation(s) en effectif dégradé ce mois</span>' : 'aucune vacation en effectif dégradé') + '.' : '') + ' Cycle ancré au ' + esc(state.cfg.cycle.anchor) + ' · effectif minimum ' + state.cfg.minStaff + ' · ' + state.cfg.agents.length + ' agents. <span class="ico-chip">' + ICON_N1 + '</span> = N1, <span class="ico-chip">' + ICON_MEAL + '</span> = repas, ❄ = journée figée. Les vacations 🔒 (échange manuel) sont conservées à la régénération.</p></div>';
     if (!mm) {
       el.innerHTML = html + '<p class="muted">Aucun planning pour ce mois. Vérifiez les paramètres et les demandes, puis cliquez sur « Générer le mois ».</p>';
       bindPlanning(); return;
@@ -260,6 +261,11 @@
       return mm.days.some(function (d) { return d.assign[a.id] || d.absent[a.id]; });
     });
   }
+  // BC (besoin de couverture) d'un jour de cycle : mémorisé à la génération, sinon recalculé (anciens plannings)
+  function dayBc(d) {
+    if (d.role !== 'J1' && d.role !== 'J2' && d.role !== 'J3') return null;
+    return d.bc !== undefined ? d.bc : P.bcFor(state.cfg, d.date, d.role, d.dayType);
+  }
   function monthLabel(m) { return MONTHS_FR[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4); }
   function gridHtml(mm) {
     let h = '<div class="month-banner" id="month-banner">' + monthLabel(ui.month) + '</div><div class="grid-wrap"><table class="grid"><thead><tr><th class="sticky">Agent</th>';
@@ -268,8 +274,8 @@
     });
     h += '</tr><tr><th class="sticky">Rôle</th>';
     mm.days.forEach(function (d) {
-      const n = Object.keys(d.assign).length;
-      h += '<th class="role-' + d.role + '">' + d.role + (d.role !== 'OFF' ? '<br><small>' + n + (Object.keys(d.lockedAgents || {}).length || d.locked ? ' 🔒' : '') + '</small>' : '') + '</th>';
+      const n = Object.keys(d.assign).length, bc = dayBc(d), deg = bc !== null && n < bc;
+      h += '<th class="role-' + d.role + '">' + d.role + (d.role !== 'OFF' ? '<br><small class="' + (deg ? 'deg' : '') + '"' + (bc !== null ? ' title="' + n + ' présent(s) pour un besoin de couverture (BC) de ' + bc + (deg ? ' : effectif dégradé' : '') + '"' : '') + '>' + n + (bc !== null ? '/' + bc : '') + (Object.keys(d.lockedAgents || {}).length || d.locked ? ' 🔒' : '') + '</small>' : '') + '</th>';
     });
     h += '</tr><tr><th class="sticky" title="Figer la journée avant de régénérer">Figer ❄</th>';
     mm.days.forEach(function (d) {
@@ -652,8 +658,10 @@
       for (let k = x.from, g = 0; k <= x.to && g < 400; k = P.addDays(k, 1), g++) {
         const d = days[k];
         if (d && d.problems.length) bad.push({ date: k, role: d.role, problems: d.problems });
+        if (d && d.quota && (!x.maxQ || d.quota.used > x.maxQ.used)) x.maxQ = { used: d.quota.used, alpha: d.quota.alpha, date: k };
       }
       bad.cycle = x.cyc ? [x.from, x.to] : null;
+      bad.maxQ = x.maxQ || null;
       out[x.i] = bad;
     });
     return out;
@@ -662,7 +670,8 @@
   function checkCell(bad) {
     if (bad === null || bad === undefined) return '<td></td>';
     const cyc = bad.cycle ? '<small class="muted">cycle du ' + fmtDay(bad.cycle[0]) + ' au ' + fmtDay(bad.cycle[1]) + '</small><br>' : '';
-    if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant et chef de tour présent tous les jours de cycle couverts">' + cyc + '✓</td>';
+    const qt = bad.maxQ ? ' Quota le plus chargé : ' + bad.maxQ.used + ' absence(s) pour un alpha de ' + bad.maxQ.alpha + ' (' + fmtDay(bad.maxQ.date) + ').' : '';
+    if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant, quota d\'absences respecté et chef de tour présent tous les jours de cycle couverts.' + esc(qt) + '">' + cyc + '✓' + (bad.maxQ ? ' <small class="muted">' + bad.maxQ.used + '/' + bad.maxQ.alpha + '</small>' : '') + '</td>';
     const txt = bad.map(function (b) { return fmtDay(b.date) + ' (' + b.role + ') : ' + b.problems.join(', '); });
     return '<td class="chk-bad" title="' + esc(txt.join('\n')) + '">' + cyc + '⚠ ' + esc(txt[0]) + (txt.length > 1 ? ' <small>+' + (txt.length - 1) + ' jour(s)</small>' : '') + '</td>';
   }
@@ -861,6 +870,13 @@
       '</div><p class="muted">Crédit d\'absence : à 1, un jour d\'absence (congé, récup…) compte comme un jour de présence pour l\'équité des nuits, N1, repas, soirées, etc. : un agent absent rattrape ensuite son retard ; à 0, seule la présence compte. Les heures ne sont pas concernées. Plus le poids est élevé, plus l\'algorithme évite de charger un agent déjà au-dessus du taux d\'équipe sur ce critère. Le poids « souhait » doit rester élevé pour que les demandes soient prioritaires sur l\'équité.</p>' +
       '<p class="muted">Rythme de rattrapage : l\'équité se fait sur l\'année entière, pas en un mois. Un agent en retard (congés, absence) rattrape au plus jusqu\'au plafond de nuits du mois, et une seule N1 par mois ; une 2e N1 n\'est donnée qu\'exceptionnellement (son poids la rend coûteuse), jamais au-delà du plafond. Un dépassement inévitable (effectif insuffisant) est signalé en alerte.</p>' +
       '<p class="muted">Les compteurs ne sont jamais remis à zéro au 1er janvier : un retard de fin d\'année (congés en novembre-décembre) se rattrape au début de l\'année suivante, au même rythme plafonné.</p></div>';
+    const qTypes = c.quotaTypes || P.DEFAULT_QUOTA_TYPES;
+    h += '<div class="card"><h2 style="margin-top:0">Quotas d\'absences et besoin de couverture</h2>' +
+      '<p class="muted">Note de service TDS LFBO, page 9. « Période normale » = période d\'option ; sinon période creuse. Cardinal d\'équipe actuel : <b>' + P.cardinalOf(c) + '</b> agent(s) hors renforts' + ([6, 7, 8].indexOf(P.cardinalOf(c)) < 0 ? ' <span class="warn">(non prévu par la note : pas de contrôle de quota)</span>' : '') + '. Alpha = absences accordables par vacation ; une récup RS peut passer sur bêta s\'il n\'est pas consommé (sauf cardinal 6). BC = besoin de couverture : en dessous, l\'effectif de la vacation est dégradé.</p>' +
+      '<div class="row">Types décomptés sur le quota : ' + P.ABSENCE_TYPES.map(function (t) {
+        return '<label style="flex-direction:row;align-items:center;gap:4px;color:var(--ink)"><input type="checkbox" data-qt="' + t + '"' + (qTypes.indexOf(t) >= 0 ? ' checked' : '') + '>' + esc(TYPES[t] ? TYPES[t].replace(/ \(valeur.*\)$/, '') : t) + '</label>';
+      }).join('') + '</div>' +
+      '<label style="margin-top:10px">Quotas (alpha / bêta par période, cardinal et type de jour) et BC (JSON)<textarea id="p-quotas" rows="10">' + esc(JSON.stringify({ quotas: c.quotas || P.DEFAULT_QUOTAS, bc: c.bc || P.DEFAULT_BC }, null, 1)) + '</textarea></label></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période creuse (JSON)</h2><textarea id="p-tables-creuse" rows="12">' + esc(JSON.stringify(c.tablesCreuse || P.DEFAULT_TABLES_CREUSE, null, 1)) + '</textarea>' +
       '<p class="muted">Utilisés hors période d\'option (cycle J1 J2 J3 Repos Repos Repos). Valeurs par défaut : note de service TDS LFBO, « TDS socle hors option 1 », pages 6 à 8.</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période d\'option (JSON)</h2><textarea id="p-tables" rows="12">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
@@ -923,7 +939,11 @@
       const j2e = $('#p-j2early').value.trim().replace(/h/i, ':');
       if (!/^\d{1,2}:\d{2}$/.test(j2e)) throw new Error('Heure « J2 tôt » invalide (ex. 10:00).');
       const weights = {}; $$('[data-w]').forEach(function (i) { weights[i.dataset.w] = parseFloat(i.value) || 0; });
-      Object.assign(c, { agents: agents, tables: tables, tablesCreuse: tablesCreuse, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j0RangeSunday: $('#p-j0sun').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
+      let qb;
+      try { qb = JSON.parse($('#p-quotas').value); } catch (err) { throw new Error('quotas / BC : JSON invalide.'); }
+      if (!qb.quotas || !qb.quotas.normal || !qb.quotas.creuse || !qb.bc || !qb.bc.normal || !qb.bc.creuse) throw new Error('quotas / BC : il faut « quotas » et « bc », chacun avec « normal » et « creuse ».');
+      const quotaTypes = $$('[data-qt]').filter(function (i) { return i.checked; }).map(function (i) { return i.dataset.qt; });
+      Object.assign(c, { quotas: qb.quotas, bc: qb.bc, quotaTypes: quotaTypes, agents: agents, tables: tables, tablesCreuse: tablesCreuse, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j0RangeSunday: $('#p-j0sun').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
       c.cycle = { anchor: anchor, normal: normal, optionPeriods: periods };
       state.initial = initial;
       const renamed = old.filter(function (id) { return !seen.has(id); });

@@ -75,6 +75,7 @@ table.grid input[type=checkbox] { width: auto; margin: 0; cursor: pointer; }
 
 .month-banner { text-align: center; font-weight: 700; font-size: 20px; letter-spacing: .12em; padding: 10px 12px; margin-bottom: 8px; border-radius: 8px; background: var(--accent); color: #fff; }
 .print-legend { display: none; }
+.deg { color: var(--warn); font-weight: 700; }
 .alerts .ack { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
 .sw-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .sw-pick { font-size: 12px; }

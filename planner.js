@@ -55,6 +55,55 @@
   }
   function periodOf(cfg, k) { return inPeriods(k, cfg.cycle && cfg.cycle.optionPeriods) ? 'option' : 'creuse'; }
 
+  /* ---------- Quotas d'absences et besoin de couverture (note de service TDS LFBO, page 9) ----------
+   * « Période normale » de la note = période d'option ; sinon période creuse.
+   * Alpha : nombre d'absences accordables par vacation selon le cardinal d'équipe (nombre d'agents hors renforts).
+   * Bêta : périodes de bureau ; les récups RS peuvent être prises sur bêta s'il n'est pas consommé (sauf cardinal 6).
+   * Un alpha peut dépendre de la vacation (période creuse, cardinal 8, samedi / dimanche). */
+  const DEFAULT_QUOTAS = {
+    normal: {
+      8: { weekday: { alpha: 2, beta: 1 }, saturday: { alpha: 3, beta: 0 }, sunday: { alpha: 3, beta: 0 } },
+      7: { weekday: { alpha: 2, beta: 0.66 }, saturday: { alpha: 3, beta: 0 }, sunday: { alpha: 3, beta: 0 } },
+      6: { weekday: { alpha: 2, beta: 0.66 }, saturday: { alpha: 2, beta: 0 }, sunday: { alpha: 2, beta: 0 } }
+    },
+    creuse: {
+      8: { weekday: { alpha: 3, beta: 0 }, saturday: { alpha: { J1: 4, J2: 3, J3: 4 }, beta: 0 }, sunday: { alpha: { J1: 4, J2: 4, J3: 3 }, beta: 0 } },
+      7: { weekday: { alpha: 3, beta: 0 }, saturday: { alpha: 3, beta: 0 }, sunday: { alpha: 3, beta: 0 } },
+      6: { weekday: { alpha: 2, beta: 0 }, saturday: { alpha: 2, beta: 0 }, sunday: { alpha: 2, beta: 0 } }
+    }
+  };
+  // Valeur du BC (besoin de couverture) par vacation : en dessous, l'effectif est « dégradé » (§ 2.9).
+  const DEFAULT_BC = {
+    normal: { weekday: { J1: 7, J2: 7, J3: 7 }, saturday: { J1: 5, J2: 6, J3: 5 }, sunday: { J1: 5, J2: 6, J3: 6 } },
+    creuse: { weekday: { J1: 6, J2: 6, J3: 6 }, saturday: { J1: 5, J2: 6, J3: 5 }, sunday: { J1: 5, J2: 6, J3: 6 } }
+  };
+  // Types d'absence décomptés sur le quota alpha (réglable) : congés et récups ; formations et autres absences non comptées.
+  const DEFAULT_QUOTA_TYPES = ['CF', 'CYC', 'RS', 'RMT', 'RPT', 'REC'];
+  function quotaKey(cfg, k) { return periodOf(cfg, k) === 'option' ? 'normal' : 'creuse'; }
+  function cardinalOf(cfg) { return cfg.agents.filter(function (a) { return !a.renfort; }).length; }
+  // Quota du jour : { alpha, beta, cardinal } ou null si le cardinal n'est pas prévu par la note (6, 7 ou 8).
+  function quotaFor(cfg, k, role, dt) {
+    const card = cardinalOf(cfg), q = ((cfg.quotas || DEFAULT_QUOTAS)[quotaKey(cfg, k)] || {})[card];
+    if (!q || !q[dt]) return null;
+    const a = q[dt].alpha;
+    return { alpha: typeof a === 'object' ? a[role] : a, beta: q[dt].beta || 0, cardinal: card };
+  }
+  function bcFor(cfg, k, role, dt) {
+    const b = ((cfg.bc || DEFAULT_BC)[quotaKey(cfg, k)] || {})[dt];
+    return b && b[role] !== undefined ? b[role] : null;
+  }
+  // Contrôle du quota d'un jour : absTypes = types des agents absents (hors renforts). RS d'abord sur bêta (entier) si cardinal ≠ 6.
+  function quotaCheck(cfg, k, role, dt, absTypes) {
+    const q = quotaFor(cfg, k, role, dt);
+    if (!q || q.alpha === undefined) return null;
+    const counted = cfg.quotaTypes || DEFAULT_QUOTA_TYPES;
+    let rs = 0, other = 0;
+    absTypes.forEach(function (t) { if (counted.indexOf(t) < 0) return; if (t === 'RS') rs++; else other++; });
+    const onBeta = q.cardinal === 6 ? 0 : Math.min(rs, Math.floor(q.beta));
+    const used = other + rs - onBeta;
+    return { alpha: q.alpha, beta: q.beta, cardinal: q.cardinal, used: used, onBeta: onBeta, over: Math.max(0, used - q.alpha) };
+  }
+
   const DAY_TYPE_LABEL = { weekday: 'Lundi–vendredi', saturday: 'Samedi', sunday: 'Dimanche / férié' };
 
   /* ---------- Heures ---------- */
@@ -544,6 +593,9 @@
 
       const kind = role; // J1 | J2 | J3
       const table = tablesFor(cfg, k)[dt][kind], n = avail.length;
+      const qc = quotaCheck(cfg, k, kind, dt, Object.keys(av.absent).filter(function (id) { return !renfortIds.has(id); }).map(function (id) { return av.absType[id]; }));
+      if (qc && qc.over) day.warnings.push('Quota d\'absences dépassé : ' + qc.used + ' absence(s) décomptée(s) pour un alpha de ' + qc.alpha + ' (cardinal ' + qc.cardinal + ').');
+      day.bc = bcFor(cfg, k, kind, dt);
       if (n === 0) { day.warnings.push('Aucun agent disponible.'); continue; }
       if (n < cfg.minStaff) day.warnings.push('Effectif de ' + n + ' < minimum ' + cfg.minStaff + '.');
       if (kind === 'J3' && n < cfg.nightCount) day.warnings.push('Seulement ' + n + ' agent(s) pour ' + cfg.nightCount + ' postes de nuit.');
@@ -720,22 +772,27 @@
     if (!from || !to || to < from) return out;
     const idx = indexRequests(cfg, requests, from, to, warnings);
     const roles = buildRoles(cfg.cycle, from, to);
+    const hol = holidaySet(from, to, cfg.holidays);
     for (let k = from, g = 0; k <= to && g < 800; k = addDays(k, 1), g++) {
       const role = roles[k];
       if (role !== 'J1' && role !== 'J2' && role !== 'J3') continue;
-      const avail = [];
+      const avail = [], absTypes = [];
       let cdt = false;
+      const dt = dayType(k, hol);
       cfg.agents.forEach(function (a) {
         const key = a.id + '|' + k;
-        if (idx.absent.has(key) || (a.renfort && !idx.renfort.has(key))) return;
+        if (idx.absent.has(key)) { if (!a.renfort) absTypes.push(idx.absType.get(key)); return; }
+        if (a.renfort && !idx.renfort.has(key)) return;
         avail.push(a.id);
         if (a.cdt || idx.cdt.has(key)) cdt = true;
       });
       const problems = [];
+      const quota = quotaCheck(cfg, k, role, dt, absTypes);
+      if (quota && quota.over) problems.push('quota d\'absences dépassé : ' + quota.used + ' pour un alpha de ' + quota.alpha);
       if (avail.length < cfg.minStaff) problems.push(avail.length + ' agent(s) pour ' + cfg.minStaff + ' minimum');
       if (!cdt && avail.length) problems.push('aucun chef de tour');
       if (role === 'J3' && avail.length < cfg.nightCount) problems.push('nuits non couvertes');
-      out[k] = { role: role, avail: avail, cdt: cdt, problems: problems };
+      out[k] = { role: role, dayType: dt, avail: avail, cdt: cdt, problems: problems, quota: quota, bc: bcFor(cfg, k, role, dt) };
     }
     return out;
   }
@@ -851,6 +908,8 @@
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
     buildRoles: buildRoles, slotMetrics: slotMetrics, computeCounters: computeCounters, generateMonth: generateMonth,
+    DEFAULT_QUOTAS: DEFAULT_QUOTAS, DEFAULT_BC: DEFAULT_BC, DEFAULT_QUOTA_TYPES: DEFAULT_QUOTA_TYPES,
+    quotaFor: quotaFor, bcFor: bcFor, quotaCheck: quotaCheck, cardinalOf: cardinalOf,
     ABSENCE_TYPES: ABSENCE_TYPES, absenceLabel: absenceLabel, cycleSpan: cycleSpan, requestSpan: requestSpan,
     swapAgents: swapAgents, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };

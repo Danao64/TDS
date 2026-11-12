@@ -210,6 +210,41 @@ all.filter(d => d.role === 'J3').forEach(d => {
   console.log('contrôle des demandes : OK');
 }
 
+// ---- quotas d'absences (alpha / bêta) et besoin de couverture (BC), note de service page 9
+{
+  // cardinal 7 (A1..A7, le renfort ne compte pas) ; 2027-01-08 = vendredi, J2, période creuse → alpha 3
+  assert.strictEqual(P.cardinalOf(cfg), 7);
+  const q = P.quotaFor(cfg, '2027-01-08', 'J2', 'weekday');
+  assert.deepStrictEqual([q.alpha, q.beta, q.cardinal], [3, 0, 7]);
+  const abs = (ids, type) => ids.map(a => ({ agent: a, from: '2027-01-08', to: '2027-01-08', type }));
+  const c3 = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF'), '2027-01-08', '2027-01-08')['2027-01-08'];
+  assert(!c3.problems.some(p => /quota/.test(p)), '3 congés pour alpha 3 : accepté');
+  const c4 = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF').concat(abs(['A6'], 'RPT')), '2027-01-08', '2027-01-08')['2027-01-08'];
+  assert(c4.problems.some(p => /quota d'absences dépassé : 4 pour un alpha de 3/.test(p)), c4.problems.join());
+  const cf = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF').concat(abs(['A6'], 'FORM')), '2027-01-08', '2027-01-08')['2027-01-08'];
+  assert(!cf.problems.some(p => /quota/.test(p)), 'une formation ne compte pas dans le quota');
+  // période normale (= période d'option), cardinal 8 : alpha 2 + bêta 1 en semaine → une RS peut passer sur bêta
+  const c8 = { ...cfg, agents: cfg.agents.concat([{ id: 'A8', renfort: false, cdt: false }]) };
+  const k = '2027-06-08'; // mardi, J3, période d'option
+  assert.deepStrictEqual(P.quotaFor(c8, k, 'J3', 'weekday'), { alpha: 2, beta: 1, cardinal: 8 });
+  const ab = (ids, type) => ids.map(a => ({ agent: a, from: k, to: k, type }));
+  assert.strictEqual(P.staffingCheck(c8, ab(['A2', 'A3'], 'CF').concat(ab(['A5'], 'RS')), k, k)[k].quota.over, 0, '2 CF + 1 RS sur bêta : accepté');
+  assert.strictEqual(P.staffingCheck(c8, ab(['A2', 'A3', 'A5'], 'CF'), k, k)[k].quota.over, 1, '3 CF pour alpha 2 : dépassé');
+  // période creuse, cardinal 8, samedi : alpha propre à chaque vacation (J1 4, J2 3, J3 4)
+  assert.strictEqual(P.quotaFor(c8, '2027-01-02', 'J2', 'saturday').alpha, 3);
+  assert.strictEqual(P.quotaFor(c8, '2027-01-02', 'J1', 'saturday').alpha, 4);
+  // BC
+  assert.strictEqual(P.bcFor(cfg, '2027-01-08', 'J2', 'weekday'), 6, 'BC période creuse semaine');
+  assert.strictEqual(P.bcFor(cfg, '2027-06-08', 'J3', 'weekday'), 7, 'BC période normale semaine');
+  assert.strictEqual(P.bcFor(cfg, '2027-06-06', 'J1', 'sunday'), 5, 'BC dimanche');
+  // génération : alerte de quota dépassé et BC mémorisé sur chaque jour de cycle
+  const res = P.generateMonth(cfg, abs(['A2', 'A3', 'A5', 'A6'], 'CF'), {}, '2027-01', null, []);
+  const d5 = res.days.find(d => d.date === '2027-01-08');
+  assert(d5.warnings.some(w => /Quota d'absences dépassé : 4/.test(w)), d5.warnings.join());
+  assert.strictEqual(d5.bc, 6);
+  console.log('quotas et BC : OK (alpha / bêta selon cardinal et période, formation non décomptée, BC par vacation)');
+}
+
 // ---- impact d'un échange : rééquilibrer = négatif, aggraver = positif
 {
   const month = '2027-03', md = all.filter(z => z.date.startsWith(month));
