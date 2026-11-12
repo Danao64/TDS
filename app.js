@@ -211,9 +211,13 @@
       bindPlanning(); return;
     }
     const warns = [];
-    (mm.warnings || []).forEach(function (w) { warns.push(w); });
+    // Alerte « date d'ancrage » : masquée une fois acquittée, tant que la date d'ancrage ne change pas
+    const isAnchorWarn = function (w) { return w.indexOf('La date d\'ancrage du cycle') === 0; };
+    (mm.warnings || []).forEach(function (w) { if (!(isAnchorWarn(w) && state.ackAnchor === state.cfg.cycle.anchor)) warns.push(w); });
     mm.days.forEach(function (d) { (d.warnings || []).forEach(function (w) { warns.push(d.date + ' : ' + w); }); });
-    if (warns.length) html += '<div class="card"><b class="warn">' + warns.length + ' alerte(s)</b><ul class="alerts">' + warns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>';
+    if (warns.length) html += '<div class="card"><b class="warn">' + warns.length + ' alerte(s)</b><ul class="alerts">' + warns.map(function (w) {
+      return '<li>' + esc(w) + (isAnchorWarn(w) ? ' <button class="btn sec ack" data-act="ack-anchor" title="Ne plus afficher cette alerte (elle reviendra si la date d\'ancrage change)">✓ Compris</button>' : '') + '</li>';
+    }).join('') + '</ul></div>';
     html += freezeHtml(mm) + gridHtml(mm);
     html += agentSheetHtml(mm);
     html += swapHtml(mm);
@@ -978,6 +982,7 @@
       case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { pushUndo('suppression de toutes les demandes'); requestChanged(state.requests.map(reqMonth)); state.requests = []; save(); renderRequests(); } break;
       case 'regen-stale': regenStale(); break;
       case 'undo': undo(); break;
+      case 'ack-anchor': state.ackAnchor = state.cfg.cycle.anchor; save(); keepScroll(renderPlanning); toast('Alerte sur la date d\'ancrage masquée.'); break;
       case 'sw-pick': $('#sw-b').value = t.dataset.b; $$('.sw-pick').forEach(function (x) { x.classList.toggle('on', x === t); }); break;
       case 'clear-month': clearMonth(); break;
       case 'agent-print': printAgent(); break;
