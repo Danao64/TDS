@@ -22,6 +22,8 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 4. **Statistiques** : cumul par agent (heures, nuits, soirées, nuits WE/férié, J2 tardifs, débuts tôt, J0…) avec écart au taux d'équipe.
 5. **Données** : sauvegarde / restauration JSON. Générez les mois dans l'ordre : chaque mois s'appuie sur les compteurs des précédents.
 
+Les **périodes d'option** se saisissent dans Paramètres, une par ligne, date de début puis date de fin au format JJ/MM/AAAA (ex. `01/06/2027 30/09/2027`).
+
 Le planning commence en **janvier 2027** : aucun mois ni aucune date antérieurs ne sont acceptés (menu des mois, flèche ◀, dates des demandes et du mail, date d'ancrage, périodes d'option, import). Les compteurs de départ de chaque agent se saisissent à la main dans Paramètres.
 
 ## Sauvegarde et mois à régénérer

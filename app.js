@@ -815,12 +815,13 @@
     sortedAgents().forEach(function (a) { h += agentRow(a); });
     h += '</tbody></table></div><button class="btn sec" data-act="ag-add">+ Agent</button>' +
       '<p class="muted"><b>CDT</b> (chef de tour) : seul un CDT peut tenir J1-1, J2-1 et J3-1 ; s\'il n\'y en a aucun de disponible ce jour-là, une alerte est affichée. <b>Renfort</b> : jamais planifié, sauf les jours saisis dans l\'onglet Demandes (type « Renfort disponible »).</p></div>';
-    const per = (c.cycle.optionPeriods || []).map(function (p) { return p.from + ' ' + p.to; }).join('\n');
+    const frDate = function (k) { return k.slice(8, 10) + '/' + k.slice(5, 7) + '/' + k.slice(0, 4); };
+    const per = (c.cycle.optionPeriods || []).map(function (p) { return frDate(p.from) + ' ' + frDate(p.to); }).join('\n');
     h += '<div class="card"><h2 style="margin-top:0">Cycle</h2><div class="row">' +
       '<label>Premier jour d\'un cycle (J1)<input type="date" id="p-anchor" min="' + FIRST_DAY + '" value="' + esc(c.cycle.anchor) + '"></label>' +
       '<label>Cycle normal<input id="p-normal" size="30" value="' + esc(c.cycle.normal.join(',')) + '"></label>' +
       '</div>' +
-      '<div class="row" style="margin-top:10px"><label style="flex:1;min-width:260px">Périodes d\'option (une par ligne : début fin)<textarea id="p-periods" rows="3">' + esc(per) + '</textarea></label>' +
+      '<div class="row" style="margin-top:10px"><label style="flex:1;min-width:260px">Périodes d\'option — une par ligne : date de début puis date de fin, au format JJ/MM/AAAA (ex. 01/06/2027 30/09/2027)<textarea id="p-periods" rows="3" placeholder="01/06/2027 30/09/2027">' + esc(per) + '</textarea></label>' +
       '<label style="flex:1;min-width:260px">Jours fériés supplémentaires (un par ligne, AAAA-MM-JJ)<textarea id="p-hol" rows="3">' + esc((c.holidays || []).join('\n')) + '</textarea></label></div>' +
       '<p class="muted">Les jours fériés français sont calculés automatiquement ; un férié en semaine utilise la grille « dimanche / férié ». Le cycle (6 jours) est déroulé à partir de la date d\'ancrage et ne change jamais de longueur : en période d\'option, le dernier jour OFF juste avant chaque J1 devient J0.</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Règles et pondérations</h2><div class="row">' +
@@ -869,9 +870,15 @@
       const anchor = P.normalizeDate($('#p-anchor').value);
       if (!anchor) throw new Error('Date d\'ancrage invalide.');
       if (anchor < FIRST_DAY) throw new Error('le planning commence le 1er janvier 2027 : la date d\'ancrage ne peut pas être antérieure.');
-      const periods = $('#p-periods').value.split('\n').map(function (l) {
-        const d = (l.match(/\d{4}-\d{2}-\d{2}/g) || []); return d.length >= 2 ? { from: d[0], to: d[1] } : null;
-      }).filter(Boolean);
+      // JJ/MM/AAAA (affiché) ou AAAA-MM-JJ (anciennes saisies) ; une ligne non reconnue est signalée
+      const periods = [];
+      $('#p-periods').value.split('\n').forEach(function (l, n) {
+        if (!l.trim()) return;
+        const d = (l.match(/\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/g) || []).map(P.normalizeDate).filter(Boolean);
+        if (d.length < 2) throw new Error('période d\'option ligne ' + (n + 1) + ' : il faut deux dates au format JJ/MM/AAAA (ex. 01/06/2027 30/09/2027).');
+        if (d[1] < d[0]) throw new Error('période d\'option ligne ' + (n + 1) + ' : la date de fin est avant la date de début.');
+        periods.push({ from: d[0], to: d[1] });
+      });
       if (periods.some(function (p) { return p.to < FIRST_DAY; })) throw new Error('période d\'option antérieure à janvier 2027.');
       periods.forEach(function (p) { if (p.from < FIRST_DAY) p.from = FIRST_DAY; });
       const hol = ($('#p-hol').value.match(/\d{4}-\d{2}-\d{2}/g) || []).filter(function (k) { return k >= FIRST_DAY; });
