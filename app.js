@@ -197,16 +197,7 @@
     if (mm) {
       html += '<button class="btn sec" data-act="export-csv">Export CSV</button><button class="btn sec" data-act="export-xlsx">Export Excel</button><button class="btn sec" data-act="print-pdf">📄 Exporter en PDF</button><button class="btn sec danger" data-act="clear-month">🗑 Effacer ce mois</button>';
     }
-    const rg = P.monthRange(ui.month), opt = optionCovers(rg);
-    html += '<label style="flex-direction:row;align-items:center;gap:6px;color:var(--ink)"><input type="checkbox" id="pl-option"' + (opt ? ' checked' : '') + '> Mois en période d\'option (J0 sur le dernier OFF avant chaque J1)</label></div>';
-    if (!(state.cfg.cycle.optionPeriods || []).length) html += '<p class="warn">Aucune période d\'option définie : le planning ne contient donc aucun J0. Cochez la case ci-dessus pour ce mois, ou définissez les périodes dans Paramètres.</p>';
-    if (mm && mm.stale) html += '<p class="warn">⚠ Ce mois est à régénérer : ' + esc(staleReason(ui.month)) + '.</p>';
-    const per = (function () { // période(s) couvertes par le mois : grille horaire utilisée
-      const set = {}; for (let k = rg[0]; k <= rg[1]; k = P.addDays(k, 1)) set[P.periodOf(state.cfg, k)] = true;
-      return set.option && set.creuse ? 'période d\'option et période creuse (grille selon le jour)' : set.option ? 'période d\'option (grille avec J0)' : 'période creuse';
-    })();
-    const degN = mm ? mm.days.filter(function (d) { const bc = dayBc(d); return bc !== null && Object.keys(d.assign).length && Object.keys(d.assign).length < bc; }).length : 0;
-    html += '<p class="muted"><b>Horaires : ' + per + '.</b>' + (mm ? ' Sous chaque vacation : présents / BC (besoin de couverture) ; ' + (degN ? '<span class="deg">' + degN + ' vacation(s) en effectif dégradé ce mois</span>' : 'aucune vacation en effectif dégradé') + '.' : '') + ' Cycle ancré au ' + esc(state.cfg.cycle.anchor) + ' · effectif minimum ' + state.cfg.minStaff + ' · ' + state.cfg.agents.length + ' agents. <span class="ico-chip">' + ICON_N1 + '</span> = N1, <span class="ico-chip">' + ICON_MEAL + '</span> = repas, ❄ = journée figée. Les vacations 🔒 (échange manuel) sont conservées à la régénération.</p></div>';
+    html += '</div></div>'; // encadré réduit à la ligne de boutons (choix du mois, génération, exports)
     if (!mm) {
       el.innerHTML = html + '<p class="muted">Aucun planning pour ce mois. Vérifiez les paramètres et les demandes, puis cliquez sur « Générer le mois ».</p>';
       bindPlanning(); return;
@@ -231,8 +222,7 @@
     return '<div class="card"><div class="row"><b>❄ Figer des journées</b> <span class="muted">' + n + ' journée(s) figée(s)</span>' +
       '<label>Figer jusqu\'au (inclus)<input type="date" id="fr-until" min="' + rg[0] + '" max="' + rg[1] + '" value="' + (function () { const t = P.toKey(new Date()); return t < rg[0] ? rg[0] : (t > rg[1] ? rg[1] : t); })() + '"></label>' +
       '<button class="btn sec" data-act="freeze-until">Figer jusqu\'à cette date</button>' +
-      '<button class="btn sec" data-act="freeze-all">Tout figer</button><button class="btn sec" data-act="unfreeze-all">Tout dégeler</button></div>' +
-      '<p class="muted">Une journée figée est conservée telle quelle (vacations, N1, repas, échanges) quand vous cliquez sur « Régénérer le mois » ; seules les autres journées sont recalculées autour d\'elle. Cochez la case sous un jour dans la grille, ou utilisez les boutons.</p></div>';
+      '<button class="btn sec" data-act="freeze-all">Tout figer</button><button class="btn sec" data-act="unfreeze-all">Tout dégeler</button></div></div>';
   }
   function keepScroll(fn) {
     const g = $('.grid-wrap'), l = g ? g.scrollLeft : 0, t = g ? g.scrollTop : 0, y = window.scrollY;
@@ -425,31 +415,7 @@
         return '<button class="btn sec sw-pick" data-act="sw-pick" data-b="' + esc(o.b) + '"><b>' + esc(o.b) + '</b> · ' + esc(slotLabel(o.slot)) + ' · ' + verdict(o) + '</button>';
       }).join('') + '</div>';
   }
-  function optionCovers(rg) {
-    return (state.cfg.cycle.optionPeriods || []).some(function (p) { return p.from <= rg[0] && p.to >= rg[1]; });
-  }
-  function toggleOption(on) {
-    const rg = P.monthRange(ui.month);
-    let per = [];
-    (state.cfg.cycle.optionPeriods || []).forEach(function (p) { // retire le mois des périodes existantes
-      if (p.to < rg[0] || p.from > rg[1]) per.push(p);
-      else {
-        if (p.from < rg[0]) per.push({ from: p.from, to: P.addDays(rg[0], -1) });
-        if (p.to > rg[1]) per.push({ from: P.addDays(rg[1], 1), to: p.to });
-      }
-    });
-    if (on) per.push({ from: rg[0], to: rg[1] });
-    per.sort(function (a, b) { return a.from < b.from ? -1 : 1; });
-    const merged = [];
-    per.forEach(function (p) { // fusionne les périodes contiguës
-      const l = merged[merged.length - 1];
-      if (l && P.addDays(l.to, 1) >= p.from) l.to = l.to > p.to ? l.to : p.to; else merged.push({ from: p.from, to: p.to });
-    });
-    state.cfg.cycle.optionPeriods = merged;
-    save(); generate(); // régénère le mois ; les mois suivants (rôles décalés) sont marqués à régénérer
-  }
   function bindPlanning() {
-    const op = $('#pl-option'); if (op) op.onchange = function () { toggleOption(op.checked); };
     const m = $('#pl-month'); if (m) m.onchange = function () { if (m.value) { ui.month = m.value; renderPlanning(); } };
     const ag = $('#ag-sheet'); if (ag) ag.onchange = function () { ui.agent = ag.value; keepScroll(renderPlanning); };
     const sw = $('#sw-day'); if (sw) { sw.onchange = fillSwap; fillSwap(); $('#sw-a').onchange = suggestSwaps; }
