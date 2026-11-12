@@ -208,7 +208,7 @@ all.filter(d => d.role === 'J3').forEach(d => {
   const rq = [
     { agent: 'A1', from: '2027-01-12', to: '2027-01-16', type: 'C', note: 'vacances' },
     { agent: 'A2', from: '2027-01-14', to: '2027-01-14', type: 'REC' },
-    { agent: 'A3', from: '2027-01-20', to: '2027-01-20', type: 'récup', sent: '2026-11-01' },
+    { agent: 'A3', from: '2027-01-20', to: '2027-01-20', type: 'récup', sent: '2027-01-02' },
     { agent: 'A4', from: '2027-02-03', to: '2027-02-04', type: 'FORM' },
     { agent: 'A5', from: '2027-01-05', to: '2027-01-05', type: 'EVITE', value: 'nuit' }
   ];

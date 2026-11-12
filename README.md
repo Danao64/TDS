@@ -16,11 +16,13 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 
 ## Utilisation
 
-1. **Paramètres** : trigrammes des agents, renforts, compteurs de départ, date d'ancrage du cycle, périodes d'option (J0), effectif minimum, pondérations.
+1. **Paramètres** : trigrammes des agents, renforts, compteurs de départ (saisis à la main), date d'ancrage du cycle, périodes d'option (J0), effectif minimum, pondérations.
 2. **Demandes** : congés, récups, formations, souhaits/évitements, créneaux imposés — saisie ou import CSV/XLSX (modèle téléchargeable).
 3. **Planning** : choisir le mois → *Générer*. Alertes (effectif < minimum…), échange manuel de deux agents (jour verrouillé 🔒, conservé à la régénération), export CSV/Excel.
 4. **Statistiques** : cumul par agent (heures, nuits, soirées, nuits WE/férié, J2 tardifs, débuts tôt, J0…) avec écart au taux d'équipe.
 5. **Données** : sauvegarde / restauration JSON. Générez les mois dans l'ordre : chaque mois s'appuie sur les compteurs des précédents.
+
+Le planning commence en **janvier 2027** : aucun mois ni aucune date antérieurs ne sont acceptés (menu des mois, flèche ◀, dates des demandes et du mail, date d'ancrage, périodes d'option, import). Les compteurs de départ de chaque agent se saisissent à la main dans Paramètres.
 
 ## Sauvegarde et mois à régénérer
 - **Rappel de sauvegarde** : les données ne vivent que dans le navigateur. Un bandeau « 💾 Sauvegarde conseillée » apparaît après chaque génération ou échange, au bout de 7 jours sans export, ou tant qu'aucune sauvegarde n'a été faite. Le bouton du bandeau télécharge `planning-tds-sauvegarde-AAAA-MM-JJ.json` ; la date du dernier export est affichée dans l'onglet Données.
@@ -38,13 +40,13 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 - **Pas de J0 après une N1** : le J0 de fin de cycle n'est jamais donné à l'agent qui a fait la N1 du J3 du même cycle (sauf s'il est le seul disponible, avec alerte).
 - **Journées figées ❄** : case « Figer » sous chaque jour (ou « Figer jusqu'au… », « Tout figer ») ; une journée figée est conservée à l'identique (vacations, N1, repas, échanges) quand on régénère le mois, le reste est recalculé autour. Une alerte signale une journée figée devenue incohérente avec les demandes (agent devenu indisponible).
 - **Paramètres : CDT en premier** : la liste des agents place les chefs de tour en tête, chacun par ordre d'inscription (premier inscrit, première ligne), puis les autres agents dans leur ordre d'inscription. Même ordre dans la grille du planning.
-- **Bandeau du mois** : un bandeau « DÉCEMBRE 2026 » s'affiche juste au-dessus du tableau de service.
+- **Bandeau du mois** : un bandeau « JANVIER 2027 » s'affiche juste au-dessus du tableau de service.
 - **Choix du mois** (onglet Planning) : menu déroulant des mois générés (✓, ou ⚠ s'il est à régénérer) et du mois suivant à générer ; les flèches ◀ ▶ passent au mois précédent / suivant, y compris un mois jamais généré.
 - **↶ Annuler** (en haut à droite) : annule la dernière action (génération, régénération, échange, gel, effacement d'un mois, demande ajoutée / modifiée / supprimée, import, paramètres, restauration). Jusqu'à 15 actions, conservées tant que la page n'est pas rechargée.
 - **Suggestions d'échange** (carte « Échanger deux agents ») : après avoir choisi le jour et l'agent A, l'appli liste les collègues avec qui échanger, du plus équitable au moins équitable (« rééquilibre », « neutre », « déséquilibre léger / fort », d'après les compteurs cumulés). Un échange qui retirerait le rang 1 à un chef de tour au profit d'un non-CDT est signalé ; cliquer sur une suggestion la choisit comme agent B.
 - **Effacer ce mois** (onglet Planning, bouton 🗑) : supprime le planning du mois affiché (vacations, journées figées, échanges) après confirmation. Les demandes et les paramètres sont conservés ; les mois suivants passent « à régénérer ». Pensez à exporter une sauvegarde avant si vous voulez pouvoir revenir en arrière.
 - **Planning individuel** (onglet Planning, sous le tableau) : choisir un agent pour voir ses vacations du mois (date, vacation, horaires, N1 / repas, absences). « Imprimer / PDF » n'imprime que cette fiche. « Calendrier (.ics) » exporte le mois, ou tous les mois générés, en fichier à importer dans le calendrier du téléphone ; les nuits finissent bien le lendemain matin, les absences sont des journées entières. Réimporter un fichier met à jour les vacations déjà importées.
-- **Export PDF** : bouton « 📄 Exporter en PDF » (onglet Planning) ; n'imprime que le planning du mois affiché (A4 paysage, une page, sans menus ni cases à cocher). Les vacations J1-1, J2-1, J3-1 y sont notées « J1 CDT », « J2 CDT », « J3 CDT » ; à l'écran comme dans le PDF, les symboles lune et assiette occupent une ligne sous la vacation, les horaires la ligne suivante. Dans la fenêtre d'impression du navigateur, choisir « Enregistrer au format PDF ». Le fichier est proposé sous le nom « Planning DÉCEMBRE 2026 ».
+- **Export PDF** : bouton « 📄 Exporter en PDF » (onglet Planning) ; n'imprime que le planning du mois affiché (A4 paysage, une page, sans menus ni cases à cocher). Les vacations J1-1, J2-1, J3-1 y sont notées « J1 CDT », « J2 CDT », « J3 CDT » ; à l'écran comme dans le PDF, les symboles lune et assiette occupent une ligne sous la vacation, les horaires la ligne suivante. Dans la fenêtre d'impression du navigateur, choisir « Enregistrer au format PDF ». Le fichier est proposé sous le nom « Planning JANVIER 2027 ».
 - **Thème** : bouton clair / sombre en haut à droite, mémorisé dans le navigateur (par défaut, le thème du système).
 - **Échange manuel** : seules les vacations des deux agents sont verrouillées (🔒) et conservées à la régénération ; le reste du jour est recalculé autour.
 - **Crédit d'absence** (Paramètres, 1 par défaut) : pour l'équité des nuits, N1, repas, soirées, etc., un jour d'absence compte comme un jour de présence ; un agent absent (congé, récup) rattrape donc ensuite son retard au lieu de le garder. Les heures ne sont pas concernées. À 0, seule la présence compte.

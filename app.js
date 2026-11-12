@@ -3,6 +3,8 @@
   'use strict';
   const P = window.Planner;
   const LS = 'tds-planning-v1';
+  // Le planning commence en janvier 2027 : aucun mois, aucune date de planning antérieurs.
+  const FIRST_MONTH = '2027-01', FIRST_DAY = '2027-01-01';
   const MONTHS_FR = ['JANVIER', 'FÉVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET', 'AOÛT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DÉCEMBRE'];
   const DOW = ['Di', 'Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa'];
   const TYPES = { C: 'Congé', REC: 'Récup', FORM: 'Formation', ABS: 'Autre absence', RENFORT: 'Renfort disponible', VEUT: 'Souhaite', EVITE: 'Évite', FIXE: 'Créneau imposé', CDT: 'Chef de tour (sur la période)' };
@@ -46,7 +48,7 @@
     try { localStorage.setItem(LS, JSON.stringify(state)); } catch (e) { toast('Sauvegarde locale impossible : ' + e.message); }
     renderNotice();
   }
-  const ui = { tab: 'planning', month: state.cfg.cycle.anchor.slice(0, 7), statMonth: null,
+  const ui = { tab: 'planning', month: startMonth(), statMonth: null,
     mail: { open: false, types: { C: true, REC: true, FORM: true, ABS: true }, from: '', to: '', onlyUnsent: true, subject: '', body: '', idx: [] } };
   if (!state.mail) state.mail = { greeting: 'Bonjour,', signature: 'Cordialement,' };
 
@@ -168,12 +170,13 @@
    *  PLANNING
    * ===================================================================== */
   // Menu des mois : mois générés (✓, ⚠ si à régénérer), le mois suivant à générer, et le mois affiché.
+  function startMonth() { const a = state.cfg.cycle.anchor.slice(0, 7); return a < FIRST_MONTH ? FIRST_MONTH : a; }
   function shiftMonth(m, n) { const d = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)); return P.toKey(d).slice(0, 7); }
   function monthOptions() {
     const gen = sortedMonths(), set = new Set(gen);
     set.add(ui.month);
-    set.add(gen.length ? shiftMonth(gen[gen.length - 1], 1) : state.cfg.cycle.anchor.slice(0, 7));
-    return Array.from(set).sort().map(function (m) {
+    set.add(gen.length ? shiftMonth(gen[gen.length - 1], 1) : startMonth());
+    return Array.from(set).filter(function (m) { return m >= FIRST_MONTH; }).sort().map(function (m) {
       const mm = state.months[m];
       const tag = mm ? (mm.stale ? ' ⚠ à régénérer' : ' ✓') : ' — à générer';
       return '<option value="' + m + '"' + (m === ui.month ? ' selected' : '') + '>' + monthLabel(m) + tag + '</option>';
@@ -183,7 +186,7 @@
     const el = $('#tab-planning');
     const mm = state.months[ui.month];
     let html = '<div class="card"><div class="row">' +
-      '<div class="month-nav"><button class="btn sec" data-act="month-prev" title="Mois précédent">◀</button>' +
+      '<div class="month-nav"><button class="btn sec" data-act="month-prev" title="Mois précédent"' + (ui.month <= FIRST_MONTH ? ' disabled' : '') + '>◀</button>' +
       '<label>Mois<select id="pl-month">' + monthOptions() + '</select></label>' +
       '<button class="btn sec" data-act="month-next" title="Mois suivant">▶</button></div>' +
       '<button class="btn" data-act="generate">' + (mm ? 'Régénérer le mois' : 'Générer le mois') + '</button>';
@@ -440,6 +443,7 @@
     return res.days.filter(function (d) { return d.frozen; }).length;
   }
   function generate() {
+    if (ui.month < FIRST_MONTH) { toast('Le planning commence en janvier 2027.'); return; }
     pushUndo((state.months[ui.month] ? 'régénération de ' : 'génération de ') + monthLabel(ui.month).toLowerCase());
     try {
       const nFrozen = generateFor(ui.month);
@@ -586,7 +590,7 @@
     reqOrder().forEach(function (i) {
       const r = state.requests[i];
       h += '<tr data-i="' + i + '"><td><select data-f="agent">' + agentOpts(r.agent) + '</select></td>' +
-        '<td><input type="date" data-f="from" value="' + esc(r.from) + '"></td><td><input type="date" data-f="to" value="' + esc(r.to) + '"></td>' +
+        '<td><input type="date" data-f="from" min="' + FIRST_DAY + '" value="' + esc(r.from) + '"></td><td><input type="date" data-f="to" min="' + FIRST_DAY + '" value="' + esc(r.to) + '"></td>' +
         '<td><select data-f="type">' + typeOpts(r.type) + '</select></td><td><input data-f="value" list="val-list" value="' + esc(r.value) + '"></td>' +
         '<td><input data-f="note" value="' + esc(r.note) + '"></td><td style="text-align:center"><input type="checkbox" data-f="sent" title="' + (r.sent ? 'Déposée le ' + esc(r.sent) : 'Pas encore déposée') + '"' + (r.sent ? ' checked' : '') + '></td>' + checkCell(chk[i]) + '<td><button class="x" data-act="req-del" data-i="' + i + '">✕</button></td></tr>';
     });
@@ -599,6 +603,7 @@
           const r = state.requests[+tr.dataset.i], m0 = reqMonth(r);
           pushUndo('modification d\'une demande de ' + r.agent);
           r[inp.dataset.f] = inp.type === 'checkbox' ? (inp.checked ? P.toKey(new Date()) : '') : inp.value;
+          if ((inp.dataset.f === 'from' || inp.dataset.f === 'to') && r[inp.dataset.f] && r[inp.dataset.f] < FIRST_DAY) { r[inp.dataset.f] = FIRST_DAY; toast('Le planning commence le 1er janvier 2027 : date ramenée au 01/01/2027.'); }
           if (inp.dataset.f === 'from' && !r.to) { r.to = r.from; }
           if (REQ_NEUTRAL.indexOf(inp.dataset.f) < 0) {
             requestChanged([m0, reqMonth(r)]);
@@ -663,7 +668,7 @@
     if (!m.open) return '';
     const chk = function (attr, on, label) { return '<label style="flex-direction:row;align-items:center;gap:5px;color:var(--ink)"><input type="checkbox" ' + attr + (on ? ' checked' : '') + '> ' + label + '</label>'; };
     return '<div class="card" id="mail-panel"><h2 style="margin-top:0">✉ Mail de dépôt des demandes</h2>' +
-      '<div class="row"><label>Du<input type="date" id="ml-from" value="' + esc(m.from) + '"></label><label>Au<input type="date" id="ml-to" value="' + esc(m.to) + '"></label>' +
+      '<div class="row"><label>Du<input type="date" id="ml-from" min="' + FIRST_DAY + '" value="' + esc(m.from) + '"></label><label>Au<input type="date" id="ml-to" min="' + FIRST_DAY + '" value="' + esc(m.to) + '"></label>' +
       chk('data-ml-type="C"', m.types.C, 'Congés') + chk('data-ml-type="REC"', m.types.REC, 'Récupérations') + chk('data-ml-type="FORM"', m.types.FORM, 'Formations') + chk('data-ml-type="ABS"', m.types.ABS, 'Autres absences') +
       chk('id="ml-unsent"', m.onlyUnsent, 'Uniquement les demandes non déposées') + '</div>' +
       '<div class="row" style="margin-top:10px"><label style="flex:1;min-width:200px">Formule d\'appel<input id="ml-greet" value="' + esc(state.mail.greeting) + '"></label>' +
@@ -749,7 +754,8 @@
       const from = P.normalizeDate(g(ci.from)), to = P.normalizeDate(g(ci.to)) || from, type = P.normalizeType(g(ci.type));
       const agent = String(g(ci.agent)).trim();
       if (!from || !type || !agent) { rejected.push('ligne ' + (hi + n + 2)); return; }
-      out.push({ agent: agent, from: from, to: to, type: type, value: String(g(ci.value) || '').trim(), note: String(g(ci.note) || '').trim() });
+      if ((to || from) < FIRST_DAY) { rejected.push('ligne ' + (hi + n + 2) + ' (avant janvier 2027)'); return; }
+      out.push({ agent: agent, from: from < FIRST_DAY ? FIRST_DAY : from, to: to, type: type, value: String(g(ci.value) || '').trim(), note: String(g(ci.note) || '').trim() });
     });
     return { out: out, rejected: rejected };
   }
@@ -811,7 +817,7 @@
       '<p class="muted"><b>CDT</b> (chef de tour) : seul un CDT peut tenir J1-1, J2-1 et J3-1 ; s\'il n\'y en a aucun de disponible ce jour-là, une alerte est affichée. <b>Renfort</b> : jamais planifié, sauf les jours saisis dans l\'onglet Demandes (type « Renfort disponible »).</p></div>';
     const per = (c.cycle.optionPeriods || []).map(function (p) { return p.from + ' ' + p.to; }).join('\n');
     h += '<div class="card"><h2 style="margin-top:0">Cycle</h2><div class="row">' +
-      '<label>Premier jour d\'un cycle (J1)<input type="date" id="p-anchor" value="' + esc(c.cycle.anchor) + '"></label>' +
+      '<label>Premier jour d\'un cycle (J1)<input type="date" id="p-anchor" min="' + FIRST_DAY + '" value="' + esc(c.cycle.anchor) + '"></label>' +
       '<label>Cycle normal<input id="p-normal" size="30" value="' + esc(c.cycle.normal.join(',')) + '"></label>' +
       '</div>' +
       '<div class="row" style="margin-top:10px"><label style="flex:1;min-width:260px">Périodes d\'option (une par ligne : début fin)<textarea id="p-periods" rows="3">' + esc(per) + '</textarea></label>' +
@@ -862,10 +868,13 @@
       if (!normal.length || !normal.every(okRole)) throw new Error('Cycle : valeurs admises J1, J2, J3, OFF.');
       const anchor = P.normalizeDate($('#p-anchor').value);
       if (!anchor) throw new Error('Date d\'ancrage invalide.');
+      if (anchor < FIRST_DAY) throw new Error('le planning commence le 1er janvier 2027 : la date d\'ancrage ne peut pas être antérieure.');
       const periods = $('#p-periods').value.split('\n').map(function (l) {
         const d = (l.match(/\d{4}-\d{2}-\d{2}/g) || []); return d.length >= 2 ? { from: d[0], to: d[1] } : null;
       }).filter(Boolean);
-      const hol = ($('#p-hol').value.match(/\d{4}-\d{2}-\d{2}/g) || []);
+      if (periods.some(function (p) { return p.to < FIRST_DAY; })) throw new Error('période d\'option antérieure à janvier 2027.');
+      periods.forEach(function (p) { if (p.from < FIRST_DAY) p.from = FIRST_DAY; });
+      const hol = ($('#p-hol').value.match(/\d{4}-\d{2}-\d{2}/g) || []).filter(function (k) { return k >= FIRST_DAY; });
       const tables = JSON.parse($('#p-tables').value);
       ['weekday', 'saturday', 'sunday'].forEach(function (dt) {
         ['J1', 'J2', 'J3'].forEach(function (k) {
@@ -908,7 +917,7 @@
           const s = JSON.parse(rd.result);
           if (!s.cfg || !s.cfg.cycle || !s.cfg.agents) throw new Error('fichier non reconnu');
           pushUndo('restauration d\'une sauvegarde');
-          state = Object.assign(defaultState(), s); save(); ui.month = state.cfg.cycle.anchor.slice(0, 7); toast('Sauvegarde restaurée.'); render();
+          state = Object.assign(defaultState(), s); dropBefore2027(); save(); ui.month = startMonth(); toast('Sauvegarde restaurée.'); render();
         } catch (err) { toast('Restauration impossible : ' + err.message); }
       };
       rd.readAsText(f);
@@ -921,7 +930,7 @@
     if (t.dataset.tab) { showTab(t.dataset.tab); return; }
     switch (t.dataset.act) {
       case 'generate': generate(); break;
-      case 'month-prev': ui.month = shiftMonth(ui.month, -1); renderPlanning(); break;
+      case 'month-prev': if (ui.month > FIRST_MONTH) { ui.month = shiftMonth(ui.month, -1); renderPlanning(); } break;
       case 'month-next': ui.month = shiftMonth(ui.month, 1); renderPlanning(); break;
       case 'freeze-until': { const u = $('#fr-until').value; if (!u) { toast('Choisissez une date.'); break; } toast(setFrozen(function (d) { return d.date <= u; }, true) + ' journée(s) figée(s) jusqu\'au ' + u + '.'); break; }
       case 'freeze-all': toast(setFrozen(function () { return true; }, true) + ' journée(s) figée(s).'); break;
@@ -949,7 +958,7 @@
       case 'ag-del': t.closest('tr').remove(); break;
       case 'params-save': saveParams(); break;
       case 'json-export': exportBackup(); break;
-      case 'reset': if (confirm('Effacer paramètres, demandes et plannings ?')) { pushUndo('réinitialisation complète'); state = defaultState(); save(); ui.month = state.cfg.cycle.anchor.slice(0, 7); render(); toast('Données réinitialisées.'); } break;
+      case 'reset': if (confirm('Effacer paramètres, demandes et plannings ?')) { pushUndo('réinitialisation complète'); state = defaultState(); save(); ui.month = startMonth(); render(); toast('Données réinitialisées.'); } break;
     }
   });
 
@@ -979,6 +988,18 @@
   });
   paintThemeBtn();
 
+  // Mois antérieurs à janvier 2027 (anciennes données) : retirés, récupérables avec ↶ Annuler tant que la page est ouverte.
+  function dropBefore2027() {
+    const old = Object.keys(state.months).filter(function (m) { return m < FIRST_MONTH; });
+    if (!old.length) return 0;
+    pushUndo('retrait des mois antérieurs à janvier 2027');
+    old.forEach(function (m) { delete state.months[m]; });
+    if (state.cfg.cycle.anchor < FIRST_DAY) state.cfg.cycle.anchor = FIRST_DAY;
+    return old.length;
+  }
+  const dropped = dropBefore2027();
+  if (dropped) { save(); ui.month = startMonth(); }
   render();
+  if (dropped) toast(dropped + ' mois antérieur(s) à janvier 2027 retiré(s) : le planning commence en janvier 2027 (↶ Annuler pour les récupérer).');
   if (migrated) { save(); toast('Pondération « Nuit » passée de 4 à 8 (nouveau réglage par défaut, rattrapage des nuits sur l\'année). Modifiable dans Paramètres.'); }
 })();
