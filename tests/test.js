@@ -170,6 +170,39 @@ all.filter(d => d.role === 'J3').forEach(d => {
   assert(natDev > -2, 'B4 doit avoir rattrapé l\'essentiel de ses nuits sur l\'année');
 }
 
+// ---- contrôle d'effectif des demandes (avant génération)
+{
+  const rq = [
+    { agent: 'A1', from: '2027-01-01', to: '2027-01-01', type: 'C' }, { agent: 'A4', from: '2027-01-01', to: '2027-01-01', type: 'C' }, // les 2 CDT absents le 1er
+    { agent: 'A2', from: '2027-01-02', to: '2027-01-02', type: 'C' }, { agent: 'A3', from: '2027-01-02', to: '2027-01-02', type: 'REC' },
+    { agent: 'A5', from: '2027-01-02', to: '2027-01-02', type: 'FORM' }, { agent: 'A6', from: '2027-01-02', to: '2027-01-02', type: 'C' }
+  ];
+  const chk = P.staffingCheck(cfg, rq, '2027-01-01', '2027-01-06');
+  assert.deepStrictEqual(Object.keys(chk), ['2027-01-01', '2027-01-02', '2027-01-03'], 'seuls les jours de cycle sont contrôlés');
+  assert(chk['2027-01-01'].problems.includes('aucun chef de tour'));
+  assert.strictEqual(chk['2027-01-02'].avail.length, 3, '7 agents - 4 absents, renfort non compté sans demande RENFORT');
+  assert(chk['2027-01-02'].problems[0].startsWith('3 agent(s) pour 4 minimum'));
+  assert.deepStrictEqual(chk['2027-01-03'].problems, []);
+  console.log('contrôle des demandes : OK');
+}
+
+// ---- impact d'un échange : rééquilibrer = négatif, aggraver = positif
+{
+  const month = '2027-03', md = all.filter(z => z.date.startsWith(month));
+  const counters = P.computeCounters(all.filter(z => z.date < '2027-04-01'), cfg, {});
+  const day = md.find(z => z.role === 'J3' && Object.keys(z.assign).length >= 5);
+  const ids = Object.keys(day.assign), night = ids.filter(i => day.assign[i].rank <= cfg.nightCount && !day.assign[i].n1 && !day.assign[i].meal), eve = ids.filter(i => day.assign[i].rank > cfg.nightCount);
+  const a = night[0], b = eve[0];
+  const d1 = P.swapImpact(cfg, counters, day, a, b), d2 = P.swapImpact(cfg, counters, day, b, a);
+  assert(Math.abs(d1 - d2) < 1e-9, 'impact symétrique');
+  // on charge artificiellement a en nuits : lui retirer sa nuit doit rééquilibrer
+  const heavy = JSON.parse(JSON.stringify(counters)); heavy[a].nights += 6; heavy[b].nights -= 6;
+  assert(P.swapImpact(cfg, heavy, day, a, b) < 0, 'retirer une nuit à un agent surchargé doit rééquilibrer');
+  const light = JSON.parse(JSON.stringify(counters)); light[a].nights -= 6; light[b].nights += 6;
+  assert(P.swapImpact(cfg, light, day, a, b) > 0, 'donner une nuit à un agent déjà chargé doit déséquilibrer');
+  console.log('impact d\'un échange : OK');
+}
+
 // ---- mail de dépôt des demandes
 {
   const rq = [

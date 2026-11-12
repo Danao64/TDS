@@ -75,6 +75,16 @@ table.grid input[type=checkbox] { width: auto; margin: 0; cursor: pointer; }
 
 .month-banner { text-align: center; font-weight: 700; font-size: 20px; letter-spacing: .12em; padding: 10px 12px; margin-bottom: 8px; border-radius: 8px; background: var(--accent); color: #fff; }
 .print-legend { display: none; }
+.sw-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.sw-pick { font-size: 12px; }
+.sw-pick.on { outline: 2px solid var(--accent); }
+.sw-pick .good { color: var(--r-j0); } .sw-pick .bad { color: var(--bad); } .sw-pick .warn { color: var(--warn); }
+.undobtn { margin-left: auto; margin-right: 6px; }
+.undobtn:not([hidden]) + .themebtn { margin-left: 0; }
+td.chk-ok { color: var(--r-j0); text-align: center; font-weight: 700; }
+td.chk-bad { color: var(--bad); font-size: 12px; white-space: nowrap; }
+.month-nav { display: flex; align-items: flex-end; gap: 6px; }
+.month-nav .btn { padding: 6px 10px; }
 .notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--frozen); }
 .notice.warnbox { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }
 .notice span { flex: 1 1 320px; }

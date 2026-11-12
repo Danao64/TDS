@@ -87,10 +87,38 @@
   function daysBefore(month) {
     return sortedMonths().filter(function (m) { return m < month; }).reduce(function (acc, m) { return acc.concat(state.months[m].days); }, []);
   }
+  // Équité par année civile (par défaut) : les compteurs repartent à zéro chaque 1er janvier ; les compteurs
+  // initiaux (Paramètres) ne valent que pour l'année de la date d'ancrage. Sinon, cumul continu depuis le début.
+  function yearly() { return state.cfg.equityPeriod !== 'continuous'; }
+  function countersBefore(month) {
+    if (!yearly()) return P.computeCounters(daysBefore(month), state.cfg, initialCounters());
+    const y = month.slice(0, 4), days = daysBefore(month).filter(function (d) { return d.date.slice(0, 4) === y; });
+    return P.computeCounters(days, state.cfg, y === state.cfg.cycle.anchor.slice(0, 4) ? initialCounters() : {});
+  }
   function statsFor(month) {
-    const before = P.computeCounters(daysBefore(month), state.cfg, initialCounters());
+    const before = countersBefore(month);
     const after = P.computeCounters(state.months[month].days, state.cfg, before);
     return { before: before, after: after };
+  }
+
+  /* ---------- Annuler : instantanés de l'état avant chaque action (en mémoire, perdus au rechargement) ---------- */
+  const undoStack = [], UNDO_MAX = 15;
+  function pushUndo(label) {
+    undoStack.push({ label: label, data: JSON.stringify(state) });
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+    paintUndo();
+  }
+  function undo() {
+    const u = undoStack.pop(); if (!u) return;
+    state = JSON.parse(u.data);
+    save(); render(); paintUndo();
+    toast('Annulé : ' + u.label + '.');
+  }
+  function paintUndo() {
+    const b = $('#undo-btn'); if (!b) return;
+    const u = undoStack[undoStack.length - 1];
+    b.hidden = !u;
+    if (u) { b.textContent = '↶ Annuler'; b.title = 'Annuler : ' + u.label + (undoStack.length > 1 ? ' (' + undoStack.length + ' actions annulables)' : ''); }
   }
 
   /* ---------- Bandeau : sauvegarde conseillée, mois à régénérer ---------- */
@@ -143,11 +171,25 @@
   /* =====================================================================
    *  PLANNING
    * ===================================================================== */
+  // Menu des mois : mois générés (✓, ⚠ si à régénérer), le mois suivant à générer, et le mois affiché.
+  function shiftMonth(m, n) { const d = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7) - 1 + n, 1)); return P.toKey(d).slice(0, 7); }
+  function monthOptions() {
+    const gen = sortedMonths(), set = new Set(gen);
+    set.add(ui.month);
+    set.add(gen.length ? shiftMonth(gen[gen.length - 1], 1) : state.cfg.cycle.anchor.slice(0, 7));
+    return Array.from(set).sort().map(function (m) {
+      const mm = state.months[m];
+      const tag = mm ? (mm.stale ? ' ⚠ à régénérer' : ' ✓') : ' — à générer';
+      return '<option value="' + m + '"' + (m === ui.month ? ' selected' : '') + '>' + monthLabel(m) + tag + '</option>';
+    }).join('');
+  }
   function renderPlanning() {
     const el = $('#tab-planning');
     const mm = state.months[ui.month];
     let html = '<div class="card"><div class="row">' +
-      '<label>Mois<input type="month" id="pl-month" value="' + esc(ui.month) + '"></label>' +
+      '<div class="month-nav"><button class="btn sec" data-act="month-prev" title="Mois précédent">◀</button>' +
+      '<label>Mois<select id="pl-month">' + monthOptions() + '</select></label>' +
+      '<button class="btn sec" data-act="month-next" title="Mois suivant">▶</button></div>' +
       '<button class="btn" data-act="generate">' + (mm ? 'Régénérer le mois' : 'Générer le mois') + '</button>';
     if (mm) {
       html += '<button class="btn sec" data-act="export-csv">Export CSV</button><button class="btn sec" data-act="export-xlsx">Export Excel</button><button class="btn sec" data-act="print-pdf">📄 Exporter en PDF</button><button class="btn sec danger" data-act="clear-month">🗑 Effacer ce mois</button>';
@@ -187,6 +229,7 @@
     window.scrollTo(0, y);
   }
   function setFrozen(pred, on) {
+    pushUndo(on ? 'gel de journées' : 'dégel de journées');
     const mm = state.months[ui.month]; let n = 0;
     mm.days.forEach(function (d) { if (d.role !== 'OFF' && pred(d) && !!d.frozen !== on) { d.frozen = on; n++; } });
     save(); keepScroll(renderPlanning); return n;
@@ -317,6 +360,7 @@
       '<label>Jour<select id="sw-day">' + active.map(function (d) { return '<option value="' + d.date + '">' + DOW[P.dow(d.date)] + ' ' + d.date.slice(8) + ' · ' + d.role + '</option>'; }).join('') + '</select></label>' +
       '<label>Agent A<select id="sw-a"></select></label><label>Agent B<select id="sw-b"></select></label>' +
       '<button class="btn" data-act="swap">Échanger</button><button class="btn sec" data-act="unlock">Déverrouiller A et B</button></div>' +
+      '<div id="sw-suggest"></div>' +
       '<p class="muted">L\'échange verrouille uniquement les vacations des deux agents ce jour-là (🔒) : elles sont conservées si vous régénérez le mois, le reste du jour est recalculé autour. La vacation complète change d\'agent (N1 🌙 et repas 🍽️ compris).</p></div>';
   }
   function fillSwap() {
@@ -325,6 +369,34 @@
     const opts = Object.keys(d.assign).map(function (id) { return '<option>' + esc(id) + '</option>'; }).join('');
     $('#sw-a').innerHTML = opts; $('#sw-b').innerHTML = opts;
     if ($('#sw-b').options.length > 1) $('#sw-b').selectedIndex = 1;
+    suggestSwaps();
+  }
+  // Suggestions : avec qui l'agent A peut échanger ce jour-là en déséquilibrant le moins les compteurs (cumul de la période d'équité).
+  function suggestSwaps() {
+    const box = $('#sw-suggest'), mm = state.months[ui.month]; if (!box || !mm) return;
+    const d = mm.days.find(function (x) { return x.date === $('#sw-day').value; }), a = $('#sw-a').value;
+    if (!d || !d.assign[a]) { box.innerHTML = ''; return; }
+    const counters = statsFor(ui.month).after;
+    const cdt = function (id) { return !!(d.cdt && d.cdt[id]); };
+    const nc = state.cfg.nightCount;
+    const list = Object.keys(d.assign).filter(function (b) { return b !== a; }).map(function (b) {
+      const x = d.assign[a], y = d.assign[b];
+      const same = x.range === y.range && !!x.n1 === !!y.n1 && !!x.meal === !!y.meal && x.kind === y.kind && (x.rank <= nc) === (y.rank <= nc);
+      const cdtKo = (x.rank === 1 && cdt(a) && !cdt(b)) || (y.rank === 1 && cdt(b) && !cdt(a));
+      return { b: b, delta: P.swapImpact(state.cfg, counters, d, a, b), same: same, cdtKo: cdtKo, slot: y };
+    }).filter(function (o) { return !o.same; });
+    if (!list.length) { box.innerHTML = '<p class="muted">Aucun échange utile pour ' + esc(a) + ' ce jour-là (vacations identiques).</p>'; return; }
+    list.sort(function (p, q) { return (p.cdtKo - q.cdtKo) || (p.delta - q.delta); });
+    const verdict = function (o) {
+      if (o.cdtKo) return '<span class="bad">⚠ rang 1 sans chef de tour</span>';
+      if (o.delta < -0.5) return '<span class="good">rééquilibre</span>';
+      if (o.delta <= 0.5) return '<span class="muted">neutre</span>';
+      return '<span class="' + (o.delta > 8 ? 'bad' : 'warn') + '">déséquilibre ' + (o.delta > 8 ? 'fort' : 'léger') + '</span>';
+    };
+    box.innerHTML = '<p class="muted" style="margin-bottom:4px">Échanges possibles pour <b>' + esc(a) + '</b> (' + esc(slotLabel(d.assign[a])) + '), du plus équitable au moins équitable — cliquez pour choisir l\'agent B :</p><div class="sw-list">' +
+      list.map(function (o) {
+        return '<button class="btn sec sw-pick" data-act="sw-pick" data-b="' + esc(o.b) + '"><b>' + esc(o.b) + '</b> · ' + esc(slotLabel(o.slot)) + ' · ' + verdict(o) + '</button>';
+      }).join('') + '</div>';
   }
   function optionCovers(rg) {
     return (state.cfg.cycle.optionPeriods || []).some(function (p) { return p.from <= rg[0] && p.to >= rg[1]; });
@@ -353,14 +425,14 @@
     const op = $('#pl-option'); if (op) op.onchange = function () { toggleOption(op.checked); };
     const m = $('#pl-month'); if (m) m.onchange = function () { if (m.value) { ui.month = m.value; renderPlanning(); } };
     const ag = $('#ag-sheet'); if (ag) ag.onchange = function () { ui.agent = ag.value; keepScroll(renderPlanning); };
-    const sw = $('#sw-day'); if (sw) { sw.onchange = fillSwap; fillSwap(); }
+    const sw = $('#sw-day'); if (sw) { sw.onchange = fillSwap; fillSwap(); $('#sw-a').onchange = suggestSwaps; }
   }
   // Génère (ou régénère) un mois ; renvoie le nombre de journées figées conservées.
   function generateFor(month) {
     const prev = {};
     if (state.months[month]) state.months[month].days.forEach(function (d) { prev[d.date] = d; });
     const before = sortedMonths().filter(function (m) { return m < month; });
-    const res = P.generateMonth(state.cfg, state.requests, P.computeCounters(daysBefore(month), state.cfg, initialCounters()), month, prev, daysBefore(month).filter(function (x) { return x.date >= P.addDays(P.monthRange(month)[0], -8); }));
+    const res = P.generateMonth(state.cfg, state.requests, countersBefore(month), month, prev, daysBefore(month).filter(function (x) { return x.date >= P.addDays(P.monthRange(month)[0], -8); }));
     if (before.length) {
       const last = before[before.length - 1];
       const exp = P.toKey(new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7) - 2, 1))).slice(0, 7);
@@ -372,6 +444,7 @@
     return res.days.filter(function (d) { return d.frozen; }).length;
   }
   function generate() {
+    pushUndo((state.months[ui.month] ? 'régénération de ' : 'génération de ') + monthLabel(ui.month).toLowerCase());
     try {
       const nFrozen = generateFor(ui.month);
       save(); renderPlanning(); toast('Planning de ' + ui.month + ' généré' + (nFrozen ? ' · ' + nFrozen + ' journée(s) figée(s) conservée(s).' : '.'));
@@ -390,6 +463,7 @@
       (later.length ? '\n\nLes mois suivants (' + later.map(monthLabel).join(', ').toLowerCase() + ') seront à régénérer.' : '') +
       '\n\nAstuce : exportez une sauvegarde avant si vous voulez pouvoir revenir en arrière.';
     if (!confirm(msg)) return;
+    pushUndo('effacement de ' + label);
     delete state.months[ui.month];
     later.forEach(function (m) { state.months[m].stale = 'le planning de ' + label + ' a été effacé'; });
     state.genSinceBackup = true;
@@ -399,6 +473,7 @@
   function regenStale() {
     const st = staleMonths(); if (!st.length) return;
     const todo = sortedMonths().filter(function (m) { return m >= st[0]; });
+    pushUndo('régénération de ' + todo.length + ' mois');
     try {
       todo.forEach(function (m) { generateFor(m); });
       save(); render(); toast(todo.length + ' mois régénéré(s) dans l\'ordre : ' + todo.map(monthLabel).join(', ') + '.');
@@ -408,6 +483,8 @@
     const mm = state.months[ui.month]; const d = mm.days.find(function (x) { return x.date === $('#sw-day').value; });
     try {
       const a = $('#sw-a').value, b = $('#sw-b').value;
+      if (!unlock && a === b) { toast('Choisissez deux agents différents.'); return; }
+      pushUndo((unlock ? 'déverrouillage ' : 'échange ') + a + (unlock ? ' et ' : ' ↔ ') + b + ' le ' + fmtDay(d.date));
       if (unlock) {
         if (d.locked) { d.lockedAgents = Object.keys(d.assign).reduce(function (o, id) { o[id] = true; return o; }, {}); d.locked = false; }
         if (d.lockedAgents) { delete d.lockedAgents[a]; delete d.lockedAgents[b]; }
@@ -471,7 +548,7 @@
     const labels = COUNTER_FIELDS.concat([['days', 'Jours travaillés'], ['weDays', 'Jours WE/férié']]);
     let h = '<div class="card"><div class="row"><label>Cumul jusqu\'à la fin de<select id="st-month">' +
       months.map(function (m) { return '<option' + (m === ui.statMonth ? ' selected' : '') + '>' + m + '</option>'; }).join('') + '</select></label></div>' +
-      '<p class="muted">Cumul = compteurs initiaux + tous les mois générés jusqu\'au mois choisi. Sous chaque valeur : « ce mois » et l\'écart au taux d\'équipe rapporté aux jours travaillés (rouge = trop chargé, bleu = moins chargé).</p></div>';
+      '<p class="muted">' + (yearly() ? 'Cumul depuis le 1er janvier ' + ui.statMonth.slice(0, 4) + ' (équité par année civile)' + (ui.statMonth.slice(0, 4) === state.cfg.cycle.anchor.slice(0, 4) ? ', compteurs initiaux compris' : '') : 'Cumul = compteurs initiaux + tous les mois générés jusqu\'au mois choisi') + '. Sous chaque valeur : « ce mois » et l\'écart au taux d\'équipe rapporté aux jours travaillés (rouge = trop chargé, bleu = moins chargé).</p></div>';
     h += '<div class="card" style="overflow:auto"><table class="stats" style="width:100%"><thead><tr><th>Agent</th>' + labels.map(function (l) { return '<th>' + l[1] + '</th>'; }).join('') + '<th>Souhaits OK / KO</th><th>Jours d\'absence</th></tr></thead><tbody>';
     sortedAgents().forEach(function (a) {
       const c = st.after[a.id], b = st.before[a.id];
@@ -508,30 +585,66 @@
       '<button class="btn sec danger" data-act="req-clear">Tout supprimer</button></div>' +
       '<p class="muted">Types : congé (C), récup (REC), formation (FORM), autre absence (ABS) → l\'agent ne travaille pas ; <b>Souhaite / Évite</b> avec une valeur parmi <code>nuit</code>, <code>soiree</code>, <code>tot</code>, <code>tard</code>, <code>j0</code> (le souhait ou l\'évitement J0 ne compte que les jours où un J0 existe) ; <b>Créneau imposé</b> avec une valeur du type <code>J2-3</code> ou <code>J0</code> ; <b>Renfort disponible</b> pour les agents marqués « renfort » dans les paramètres : un renfort n\'est <b>jamais</b> planifié en dehors des jours saisis ici. <b>Chef de tour</b> : l\'agent est considéré CDT sur la période, en plus de la case des paramètres.</p></div>';
     h += mailPanelHtml();
-    h += '<div class="card" style="overflow:auto"><table class="list"><thead><tr><th>Agent</th><th>Du</th><th>Au</th><th>Type</th><th>Valeur</th><th>Note</th><th title="Demande déjà déposée auprès de l\'administration">Déposée</th><th></th></tr></thead><tbody>';
+    h += '<div class="card" style="overflow:auto"><table class="list"><thead><tr><th>Agent</th><th>Du</th><th>Au</th><th>Type</th><th>Valeur</th><th>Note</th><th title="Demande déjà déposée auprès de l\'administration">Déposée</th><th title="Effectif les jours de cycle couverts par la demande">Contrôle</th><th></th></tr></thead><tbody>';
+    const chk = requestChecks();
     reqOrder().forEach(function (i) {
       const r = state.requests[i];
       h += '<tr data-i="' + i + '"><td><select data-f="agent">' + agentOpts(r.agent) + '</select></td>' +
         '<td><input type="date" data-f="from" value="' + esc(r.from) + '"></td><td><input type="date" data-f="to" value="' + esc(r.to) + '"></td>' +
         '<td><select data-f="type">' + typeOpts(r.type) + '</select></td><td><input data-f="value" list="val-list" value="' + esc(r.value) + '"></td>' +
-        '<td><input data-f="note" value="' + esc(r.note) + '"></td><td style="text-align:center"><input type="checkbox" data-f="sent" title="' + (r.sent ? 'Déposée le ' + esc(r.sent) : 'Pas encore déposée') + '"' + (r.sent ? ' checked' : '') + '></td><td><button class="x" data-act="req-del" data-i="' + i + '">✕</button></td></tr>';
+        '<td><input data-f="note" value="' + esc(r.note) + '"></td><td style="text-align:center"><input type="checkbox" data-f="sent" title="' + (r.sent ? 'Déposée le ' + esc(r.sent) : 'Pas encore déposée') + '"' + (r.sent ? ' checked' : '') + '></td>' + checkCell(chk[i]) + '<td><button class="x" data-act="req-del" data-i="' + i + '">✕</button></td></tr>';
     });
-    if (!state.requests.length) h += '<tr><td colspan="8" class="muted">Aucune demande.</td></tr>';
+    if (!state.requests.length) h += '<tr><td colspan="9" class="muted">Aucune demande.</td></tr>';
     el.innerHTML = h + '</tbody></table></div><datalist id="val-list">' + ['nuit', 'soiree', 'tot', 'tard', 'j0', 'J1-1', 'J2-1', 'J3-1'].map(function (v) { return '<option value="' + v + '">'; }).join('') + '</datalist>';
     $('#req-file').onchange = importRequests;
     $$('#tab-requests tbody tr[data-i]').forEach(function (tr) {
       $$('[data-f]', tr).forEach(function (inp) {
         inp.onchange = function () {
           const r = state.requests[+tr.dataset.i], m0 = reqMonth(r);
+          pushUndo('modification d\'une demande de ' + r.agent);
           r[inp.dataset.f] = inp.type === 'checkbox' ? (inp.checked ? P.toKey(new Date()) : '') : inp.value;
           if (inp.dataset.f === 'from' && !r.to) { r.to = r.from; }
-          if (REQ_NEUTRAL.indexOf(inp.dataset.f) < 0) requestChanged([m0, reqMonth(r)]);
-          save(); if (inp.dataset.f === 'from') renderRequests();
+          if (REQ_NEUTRAL.indexOf(inp.dataset.f) < 0) {
+            requestChanged([m0, reqMonth(r)]);
+            const bad = requestChecks()[+tr.dataset.i];
+            if (bad && bad.length) toast('⚠ ' + r.agent + ' absent : ' + fmtDay(bad[0].date) + ' (' + bad[0].role + ') ' + bad[0].problems.join(', ') + (bad.length > 1 ? ' — et ' + (bad.length - 1) + ' autre(s) jour(s).' : '.'));
+          }
+          save(); if (['agent', 'from', 'to', 'type'].indexOf(inp.dataset.f) >= 0) renderRequests();
         };
       });
     });
   }
   /* ---------- Ordre d'affichage : les dernières demandes en haut ---------- */
+  /* ---------- Contrôle des demandes d'absence : effectif des jours couverts ---------- */
+  const ABS_TYPES = ['C', 'REC', 'FORM', 'ABS'];
+  function requestChecks() { // index de la demande -> jours à problème (ou [] si tout va bien, null si sans objet)
+    const out = {}, abs = [];
+    state.requests.forEach(function (r, i) {
+      const t = P.normalizeType(r.type), f = P.normalizeDate(r.from), to = P.normalizeDate(r.to) || f;
+      if (ABS_TYPES.indexOf(t) < 0 || !f) { out[i] = null; return; }
+      abs.push({ i: i, from: f, to: to < f ? f : to });
+    });
+    if (!abs.length) return out;
+    const from = abs.reduce(function (m, x) { return x.from < m ? x.from : m; }, abs[0].from);
+    const to = abs.reduce(function (m, x) { return x.to > m ? x.to : m; }, abs[0].to);
+    const days = P.staffingCheck(state.cfg, state.requests, from < state.cfg.cycle.anchor ? state.cfg.cycle.anchor : from, to);
+    abs.forEach(function (x) {
+      const bad = [];
+      for (let k = x.from, g = 0; k <= x.to && g < 400; k = P.addDays(k, 1), g++) {
+        const d = days[k];
+        if (d && d.problems.length) bad.push({ date: k, role: d.role, problems: d.problems });
+      }
+      out[x.i] = bad;
+    });
+    return out;
+  }
+  function fmtDay(k) { return DOW[P.dow(k)] + ' ' + k.slice(8) + '/' + k.slice(5, 7); }
+  function checkCell(bad) {
+    if (bad === null || bad === undefined) return '<td></td>';
+    if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant et chef de tour présent tous les jours de cycle couverts">✓</td>';
+    const txt = bad.map(function (b) { return fmtDay(b.date) + ' (' + b.role + ') : ' + b.problems.join(', '); });
+    return '<td class="chk-bad" title="' + esc(txt.join('\n')) + '">⚠ ' + esc(txt[0]) + (txt.length > 1 ? ' <small>+' + (txt.length - 1) + ' jour(s)</small>' : '') + '</td>';
+  }
   const REQ_NEUTRAL = ['note', 'sent']; // champs sans effet sur le planning
   function reqMonth(r) { const d = P.normalizeDate(r.from); return d ? d.slice(0, 7) : null; }
   function requestChanged(months) { // months : mois de début des demandes avant / après modification
@@ -651,6 +764,7 @@
         const res = rowsToRequests(rows);
         const known = {}; ids().forEach(function (id) { known[id.toUpperCase()] = id; });
         let added = 0; const unknown = new Set(); const bts = nextTs();
+        pushUndo('import de ' + res.out.length + ' demande(s)');
         res.out.forEach(function (r) {
           const k = known[r.agent.toUpperCase()];
           if (k) r.agent = k; else if (r.type !== 'RENFORT') unknown.add(r.agent);
@@ -713,13 +827,15 @@
       '<label>Horaire du J0<input id="p-j0" value="' + esc(c.j0Range) + '"></label>' +
       '<label>J2 « tôt » : début au plus tard à<input id="p-j2early" size="6" value="' + esc(c.j2EarlyMax || '10:00') + '"></label>' +
       '<label>Crédit d\'absence pour l\'équité (0 à 1)<input type="number" id="p-abscredit" step="0.1" min="0" max="1" style="width:90px" value="' + (c.absenceCredit === undefined ? 1 : c.absenceCredit) + '"></label>' +
+      '<label>Équité calculée<select id="p-equity"><option value="year"' + (c.equityPeriod !== 'continuous' ? ' selected' : '') + '>par année civile (remise à zéro au 1er janvier)</option><option value="continuous"' + (c.equityPeriod === 'continuous' ? ' selected' : '') + '>en continu, d\'une année sur l\'autre</option></select></label>' +
       '<label>Nuits max. par agent et par mois<input type="number" id="p-maxnights" min="1" style="width:90px" value="' + P.caps(c).nights + '"></label>' +
       '<label>N1 max. par agent et par mois<input type="number" id="p-maxn1" min="1" style="width:90px" value="' + P.caps(c).n1 + '"></label></div><div class="row" style="margin-top:10px">' +
       [['hours', 'Heures (par h)'], ['night', 'Nuit'], ['evening', 'Soirée J3'], ['late', 'J2 tardif'], ['early', 'Début tôt'], ['nightWE', 'Nuit WE/férié'], ['n1', 'N1 🌙 (par écart)'], ['meal', 'Repas 🍽️ (par écart)'], ['n1Extra', '2e N1 du mois (exceptionnelle)'], ['j2tot', 'J2 tôt avant une nuit'], ['pref', 'Souhait / évitement']].map(function (x) {
         return '<label>' + x[1] + '<input type="number" step="any" min="0" data-w="' + x[0] + '" value="' + w[x[0]] + '" style="width:90px"></label>';
       }).join('') +
       '</div><p class="muted">Crédit d\'absence : à 1, un jour d\'absence (congé, récup…) compte comme un jour de présence pour l\'équité des nuits, N1, repas, soirées, etc. : un agent absent rattrape ensuite son retard ; à 0, seule la présence compte. Les heures ne sont pas concernées. Plus le poids est élevé, plus l\'algorithme évite de charger un agent déjà au-dessus du taux d\'équipe sur ce critère. Le poids « souhait » doit rester élevé pour que les demandes soient prioritaires sur l\'équité.</p>' +
-      '<p class="muted">Rythme de rattrapage : l\'équité se fait sur l\'année entière, pas en un mois. Un agent en retard (congés, absence) rattrape au plus jusqu\'au plafond de nuits du mois, et une seule N1 par mois ; une 2e N1 n\'est donnée qu\'exceptionnellement (son poids la rend coûteuse), jamais au-delà du plafond. Un dépassement inévitable (effectif insuffisant) est signalé en alerte.</p></div>';
+      '<p class="muted">Rythme de rattrapage : l\'équité se fait sur l\'année entière, pas en un mois. Un agent en retard (congés, absence) rattrape au plus jusqu\'au plafond de nuits du mois, et une seule N1 par mois ; une 2e N1 n\'est donnée qu\'exceptionnellement (son poids la rend coûteuse), jamais au-delà du plafond. Un dépassement inévitable (effectif insuffisant) est signalé en alerte.</p>' +
+      '<p class="muted">Équité par année civile : chaque 1er janvier, tous les compteurs repartent à zéro et tout le monde recommence à égalité ; un retard non rattrapé en décembre est abandonné. En continu : le retard est reporté sur l\'année suivante. Les compteurs initiaux ci-dessus ne valent que pour la première année (celle de la date d\'ancrage).</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires (JSON)</h2><textarea id="p-tables" rows="14">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
       '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 ».</p></div>';
     h += '<button class="btn" data-act="params-save">Enregistrer les paramètres</button>';
@@ -733,7 +849,7 @@
   }
   function saveParams() {
     try {
-      const c = state.cfg, old = ids(), sig0 = JSON.stringify([state.cfg, state.initial]);
+      const c = state.cfg, old = ids(), sig0 = JSON.stringify([state.cfg, state.initial]), snap = JSON.stringify(state);
       const agents = [], initial = {}, seen = new Set();
       $$('#ag-table tbody tr').forEach(function (tr) {
         const id = $('[data-k=id]', tr).value.trim().toUpperCase();
@@ -766,11 +882,14 @@
       const j2e = $('#p-j2early').value.trim().replace(/h/i, ':');
       if (!/^\d{1,2}:\d{2}$/.test(j2e)) throw new Error('Heure « J2 tôt » invalide (ex. 10:00).');
       const weights = {}; $$('[data-w]').forEach(function (i) { weights[i.dataset.w] = parseFloat(i.value) || 0; });
-      Object.assign(c, { agents: agents, tables: tables, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
+      Object.assign(c, { agents: agents, tables: tables, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), equityPeriod: $('#p-equity').value === 'continuous' ? 'continuous' : 'year', weights: weights });
       c.cycle = { anchor: anchor, normal: normal, optionPeriods: periods };
       state.initial = initial;
       const renamed = old.filter(function (id) { return !seen.has(id); });
-      if (JSON.stringify([state.cfg, state.initial]) !== sig0 && sortedMonths().length) markStale(sortedMonths()[0], 'les paramètres ont été modifiés');
+      if (JSON.stringify([state.cfg, state.initial]) !== sig0) {
+        undoStack.push({ label: 'modification des paramètres', data: snap }); if (undoStack.length > UNDO_MAX) undoStack.shift(); paintUndo();
+        if (sortedMonths().length) markStale(sortedMonths()[0], 'les paramètres ont été modifiés');
+      }
       save(); renderParams();
       toast('Paramètres enregistrés.' + (renamed.length ? ' Agents retirés/renommés : ' + renamed.join(', ') + ' (régénérez les mois concernés).' : '') + ' Les plannings déjà générés ne changent pas tant qu\'ils ne sont pas régénérés.');
     } catch (e) { toast('Paramètres non enregistrés : ' + e.message); }
@@ -793,6 +912,7 @@
         try {
           const s = JSON.parse(rd.result);
           if (!s.cfg || !s.cfg.cycle || !s.cfg.agents) throw new Error('fichier non reconnu');
+          pushUndo('restauration d\'une sauvegarde');
           state = Object.assign(defaultState(), s); save(); ui.month = state.cfg.cycle.anchor.slice(0, 7); toast('Sauvegarde restaurée.'); render();
         } catch (err) { toast('Restauration impossible : ' + err.message); }
       };
@@ -806,6 +926,8 @@
     if (t.dataset.tab) { showTab(t.dataset.tab); return; }
     switch (t.dataset.act) {
       case 'generate': generate(); break;
+      case 'month-prev': ui.month = shiftMonth(ui.month, -1); renderPlanning(); break;
+      case 'month-next': ui.month = shiftMonth(ui.month, 1); renderPlanning(); break;
       case 'freeze-until': { const u = $('#fr-until').value; if (!u) { toast('Choisissez une date.'); break; } toast(setFrozen(function (d) { return d.date <= u; }, true) + ' journée(s) figée(s) jusqu\'au ' + u + '.'); break; }
       case 'freeze-all': toast(setFrozen(function () { return true; }, true) + ' journée(s) figée(s).'); break;
       case 'unfreeze-all': toast(setFrozen(function () { return true; }, false) + ' journée(s) dégelée(s).'); break;
@@ -814,10 +936,12 @@
       case 'print-pdf': printPlanning(); break;
       case 'swap': doSwap(false); break;
       case 'unlock': doSwap(true); break;
-      case 'req-add': state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'C', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([ui.month]); save(); renderRequests(); break;
-      case 'req-del': requestChanged([reqMonth(state.requests[+t.dataset.i])]); state.requests.splice(+t.dataset.i, 1); save(); renderRequests(); break;
-      case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { requestChanged(state.requests.map(reqMonth)); state.requests = []; save(); renderRequests(); } break;
+      case 'req-add': pushUndo('ajout d\'une demande'); state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'C', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([ui.month]); save(); renderRequests(); break;
+      case 'req-del': pushUndo('suppression d\'une demande de ' + (state.requests[+t.dataset.i] || {}).agent); requestChanged([reqMonth(state.requests[+t.dataset.i])]); state.requests.splice(+t.dataset.i, 1); save(); renderRequests(); break;
+      case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { pushUndo('suppression de toutes les demandes'); requestChanged(state.requests.map(reqMonth)); state.requests = []; save(); renderRequests(); } break;
       case 'regen-stale': regenStale(); break;
+      case 'undo': undo(); break;
+      case 'sw-pick': $('#sw-b').value = t.dataset.b; $$('.sw-pick').forEach(function (x) { x.classList.toggle('on', x === t); }); break;
       case 'clear-month': clearMonth(); break;
       case 'agent-print': printAgent(); break;
       case 'agent-ics': exportIcs(false); break;
@@ -830,7 +954,7 @@
       case 'ag-del': t.closest('tr').remove(); break;
       case 'params-save': saveParams(); break;
       case 'json-export': exportBackup(); break;
-      case 'reset': if (confirm('Effacer définitivement paramètres, demandes et plannings ?')) { state = defaultState(); save(); ui.month = state.cfg.cycle.anchor.slice(0, 7); render(); toast('Données réinitialisées.'); } break;
+      case 'reset': if (confirm('Effacer paramètres, demandes et plannings ?')) { pushUndo('réinitialisation complète'); state = defaultState(); save(); ui.month = state.cfg.cycle.anchor.slice(0, 7); render(); toast('Données réinitialisées.'); } break;
     }
   });
 
@@ -841,6 +965,7 @@
   document.addEventListener('change', function (e) {
     const t = e.target.closest && e.target.closest('input[data-freeze]'); if (!t) return;
     const d = state.months[ui.month].days.find(function (x) { return x.date === t.dataset.freeze; });
+    pushUndo((t.checked ? 'gel du ' : 'dégel du ') + fmtDay(d.date));
     d.frozen = t.checked; save(); keepScroll(renderPlanning);
   });
 

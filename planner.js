@@ -654,6 +654,34 @@
     return { month: month, days: days, warnings: warnings, generatedAt: new Date().toISOString() };
   }
 
+  /* ---------- Contrôle d'effectif des demandes (à la saisie, avant génération) ----------
+   * Pour chaque jour de cycle entre from et to : agents disponibles (hors absents, renforts seulement les jours
+   * saisis), présence d'un chef de tour, et problèmes : effectif < minimum, aucun CDT, nuits non couvertes. */
+  function staffingCheck(cfg, requests, from, to) {
+    const out = {}, warnings = [];
+    if (!from || !to || to < from) return out;
+    const idx = indexRequests(cfg, requests, from, to, warnings);
+    const roles = buildRoles(cfg.cycle, from, to);
+    for (let k = from, g = 0; k <= to && g < 800; k = addDays(k, 1), g++) {
+      const role = roles[k];
+      if (role !== 'J1' && role !== 'J2' && role !== 'J3') continue;
+      const avail = [];
+      let cdt = false;
+      cfg.agents.forEach(function (a) {
+        const key = a.id + '|' + k;
+        if (idx.absent.has(key) || (a.renfort && !idx.renfort.has(key))) return;
+        avail.push(a.id);
+        if (a.cdt || idx.cdt.has(key)) cdt = true;
+      });
+      const problems = [];
+      if (avail.length < cfg.minStaff) problems.push(avail.length + ' agent(s) pour ' + cfg.minStaff + ' minimum');
+      if (!cdt && avail.length) problems.push('aucun chef de tour');
+      if (role === 'J3' && avail.length < cfg.nightCount) problems.push('nuits non couvertes');
+      out[k] = { role: role, avail: avail, cdt: cdt, problems: problems };
+    }
+    return out;
+  }
+
   /* ---------- Contrôle chef de tour (rang 1) ---------- */
   function checkCdt(day) {
     day.warnings = (day.warnings || []).filter(function (w) { return w.indexOf('CDT : ') !== 0; });
@@ -671,6 +699,33 @@
     day.assign[a] = y; day.assign[b] = x; // la vacation complète (y compris N1 / repas) change d'agent
     day.lockedAgents = day.lockedAgents || {};
     day.lockedAgents[a] = true; day.lockedAgents[b] = true;
+  }
+
+  /* ---------- Impact d'un échange sur l'équité ----------
+   * counters : compteurs cumulés (période d'équité) incluant déjà le jour. Renvoie la variation de l'écart global
+   * (somme pondérée des écarts au carré au taux d'équipe) pour les deux agents : < 0 = l'échange rééquilibre. */
+  const SWAP_KEYS = [['hours', 'hours', 'hours'], ['nights', 'night', 'night'], ['evenings', 'evening', 'evening'], ['late', 'late', 'late'], ['early', 'early', 'early'], ['nightWE', 'nightWE', 'nightWE'], ['n1', 'n1', null], ['meal', 'meal', null]];
+  function swapImpact(cfg, counters, day, a, b) {
+    const W = Object.assign({}, DEFAULT_WEIGHTS, cfg.weights || {});
+    const x = day.assign[a], y = day.assign[b];
+    if (!x || !y) return 0;
+    const reg = cfg.agents.filter(function (g) { return !g.renfort && counters[g.id]; }).map(function (g) { return g.id; });
+    const mx = slotMetrics(x.kind, x.rank, x.range, day.dayType, cfg), my = slotMetrics(y.kind, y.rank, y.range, day.dayType, cfg);
+    const val = function (m, as, key) { return key[2] ? m[key[2]] : (as[key[0]] ? 1 : 0); };
+    let delta = 0;
+    SWAP_KEYS.forEach(function (key) {
+      let s = 0, d = 0;
+      reg.forEach(function (id) { s += counters[id][key[0]]; d += effDays(counters[id], cfg, key[0]); });
+      const rate = d ? s / d : 0;
+      const diff = val(my, y, key) - val(mx, x, key); // ce que a gagne (et b perd) en prenant la vacation de b
+      if (!diff) return;
+      [[a, diff], [b, -diff]].forEach(function (p) {
+        if (reg.indexOf(p[0]) < 0) return;
+        const dev = counters[p[0]][key[0]] - rate * effDays(counters[p[0]], cfg, key[0]);
+        delta += W[key[1]] / 2 * ((dev + p[1]) * (dev + p[1]) - dev * dev);
+      });
+    });
+    return delta;
   }
 
   /* ---------- Mail de dépôt des demandes d'absence ---------- */
@@ -733,6 +788,6 @@
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
     buildRoles: buildRoles, slotMetrics: slotMetrics, computeCounters: computeCounters, generateMonth: generateMonth,
-    swapAgents: swapAgents, caps: caps, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
+    swapAgents: swapAgents, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };
 });
