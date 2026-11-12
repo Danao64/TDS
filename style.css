@@ -41,6 +41,7 @@ table.list input { width: 100%; min-width: 70px; }
 table.list input[type=checkbox] { width: auto; min-width: 0; }
 .grid-wrap { overflow: auto; max-height: 75vh; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
 table.grid th, table.grid td { border: 1px solid var(--line); padding: 3px 5px; text-align: center; min-width: 74px; font-size: 12px; white-space: nowrap; }
+table.grid th.offday, table.grid td.offday { min-width: 51px; width: 51px; padding-left: 2px; padding-right: 2px; } /* jours OFF : 66 % */
 table.grid thead th { position: sticky; top: 0; background: var(--card); z-index: 3; }
 table.grid thead tr:nth-child(2) th { top: 38px; }
 table.grid .sticky { position: sticky; left: 0; background: var(--card); z-index: 4; min-width: 64px; font-weight: 600; text-align: left; }
@@ -117,6 +118,7 @@ table.grid td .sym .ico + .ico { margin-left: 3px; }
   .grid-wrap { overflow: visible; max-height: none; border: 0; border-radius: 0; background: #fff; }
   table.grid { width: 100%; table-layout: fixed; }
   table.grid th, table.grid td { min-width: 0; padding: 1px 0; font-size: 6.5px; line-height: 1.15; white-space: normal; word-break: normal; overflow: hidden; }
+  table.grid th.offday, table.grid td.offday { min-width: 0; width: var(--offw); padding: 1px 0; }
   table.grid th.sticky, table.grid td.sticky { width: 38px; position: static; font-size: 7px; text-align: left; padding-left: 2px; }
   table.grid thead th, table.grid .sticky { position: static; }
   table.grid td b { font-size: 7px; }

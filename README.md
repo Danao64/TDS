@@ -58,6 +58,7 @@ Le planning commence en **janvier 2027** : aucun mois ni aucune date antérieurs
 - **Pas de J0 après une N1** : le J0 de fin de cycle n'est jamais donné à l'agent qui a fait la N1 du J3 du même cycle (sauf s'il est le seul disponible, avec alerte).
 - **Journées figées ❄** : case « Figer » sous chaque jour (ou « Figer jusqu'au… », « Tout figer ») ; une journée figée est conservée à l'identique (vacations, N1, repas, échanges) quand on régénère le mois, le reste est recalculé autour. Une alerte signale une journée figée devenue incohérente avec les demandes (agent devenu indisponible).
 - **Paramètres : CDT en premier** : la liste des agents place les chefs de tour en tête, chacun par ordre d'inscription (premier inscrit, première ligne), puis les autres agents dans leur ordre d'inscription. Même ordre dans la grille du planning.
+- **Colonnes des jours OFF** : plus étroites (66 % de la largeur normale), à l'écran comme dans l'export PDF.
 - **Bandeau du mois** : un bandeau « JANVIER 2027 » s'affiche juste au-dessus du tableau de service.
 - **Alerte « date d'ancrage »** : quand la date d'ancrage du cycle tombe après le début du mois, une alerte le signale ; le bouton « ✓ Compris » la masque définitivement. Elle réapparaît seulement si la date d'ancrage est modifiée.
 - **Choix du mois** (onglet Planning) : menu déroulant des mois générés (✓, ou ⚠ s'il est à régénérer) et du mois suivant à générer ; les flèches ◀ ▶ passent au mois précédent / suivant, y compris un mois jamais généré.

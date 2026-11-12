@@ -268,18 +268,22 @@
   }
   function monthLabel(m) { return MONTHS_FR[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4); }
   function gridHtml(mm) {
-    let h = '<div class="month-banner" id="month-banner">' + monthLabel(ui.month) + '</div><div class="grid-wrap"><table class="grid"><thead><tr><th class="sticky">Agent</th>';
+    // Colonnes des jours OFF (vides) : 66 % de la largeur normale, à l'écran comme à l'impression
+    const off = function (d) { return d.role === 'OFF' ? ' offday' : ''; };
+    const nOff = mm.days.filter(function (d) { return d.role === 'OFF'; }).length, nWork = mm.days.length - nOff;
+    const offPct = (0.66 * 100 / (nWork + 0.66 * nOff)).toFixed(3); // part de la largeur des jours, pour l'impression
+    let h = '<div class="month-banner" id="month-banner">' + monthLabel(ui.month) + '</div><div class="grid-wrap"><table class="grid" style="--offw:' + offPct + '%"><thead><tr><th class="sticky">Agent</th>';
     mm.days.forEach(function (d) {
-      h += '<th class="' + (d.dayType !== 'weekday' ? 'we' : '') + (d.frozen ? ' frozen' : '') + '">' + (d.frozen ? '<span class="fz">❄<br></span>' : '') + DOW[P.dow(d.date)] + '<br>' + d.date.slice(8) + '</th>';
+      h += '<th class="' + (d.dayType !== 'weekday' ? 'we' : '') + (d.frozen ? ' frozen' : '') + off(d) + '">' + (d.frozen ? '<span class="fz">❄<br></span>' : '') + DOW[P.dow(d.date)] + '<br>' + d.date.slice(8) + '</th>';
     });
     h += '</tr><tr><th class="sticky">Rôle</th>';
     mm.days.forEach(function (d) {
       const n = Object.keys(d.assign).length, bc = dayBc(d), deg = bc !== null && n < bc;
-      h += '<th class="role-' + d.role + '">' + d.role + (d.role !== 'OFF' ? '<br><small class="' + (deg ? 'deg' : '') + '"' + (bc !== null ? ' title="' + n + ' présent(s) pour un besoin de couverture (BC) de ' + bc + (deg ? ' : effectif dégradé' : '') + '"' : '') + '>' + n + (bc !== null ? '/' + bc : '') + (Object.keys(d.lockedAgents || {}).length || d.locked ? ' 🔒' : '') + '</small>' : '') + '</th>';
+      h += '<th class="role-' + d.role + off(d) + '">' + d.role + (d.role !== 'OFF' ? '<br><small class="' + (deg ? 'deg' : '') + '"' + (bc !== null ? ' title="' + n + ' présent(s) pour un besoin de couverture (BC) de ' + bc + (deg ? ' : effectif dégradé' : '') + '"' : '') + '>' + n + (bc !== null ? '/' + bc : '') + (Object.keys(d.lockedAgents || {}).length || d.locked ? ' 🔒' : '') + '</small>' : '') + '</th>';
     });
     h += '</tr><tr><th class="sticky" title="Figer la journée avant de régénérer">Figer ❄</th>';
     mm.days.forEach(function (d) {
-      h += '<th class="' + (d.frozen ? 'frozen' : '') + '">' + (d.role !== 'OFF' ? '<input type="checkbox" data-freeze="' + d.date + '"' + (d.frozen ? ' checked' : '') + ' title="Figer ' + d.date + '">' : '') + '</th>';
+      h += '<th class="' + (d.frozen ? 'frozen' : '') + off(d) + '">' + (d.role !== 'OFF' ? '<input type="checkbox" data-freeze="' + d.date + '"' + (d.frozen ? ' checked' : '') + ' title="Figer ' + d.date + '">' : '') + '</th>';
     });
     h += '</tr></thead><tbody>';
     visibleAgents(mm).forEach(function (a) {
@@ -290,7 +294,7 @@
           h += '<td class="k-' + as.kind + (d.frozen ? ' frozen' : '') + ((d.lockedAgents && d.lockedAgents[a.id]) || d.locked ? ' lock' : '') + '" title="' + esc(P.DAY_TYPE_LABEL[d.dayType]) + '"><b class="scr">' + esc(as.slot) + '</b>' + printSlotHtml(as) + '<small>' + P.fmtRange(as.range) + '</small></td>';
         } else if (d.absent[a.id]) {
           h += '<td class="abs' + (d.frozen ? ' frozen' : '') + '" title="' + esc(absText(d, a.id)) + '">' + esc(d.absent[a.id]) + '</td>';
-        } else h += '<td class="off' + (d.frozen ? ' frozen' : '') + '"></td>';
+        } else h += '<td class="off' + (d.frozen ? ' frozen' : '') + off(d) + '"></td>';
       });
       h += '</tr>';
     });
