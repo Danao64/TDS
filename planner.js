@@ -261,8 +261,20 @@
     return out;
   }
 
+  // Jours « équivalents » pour l'équité : les absences comptent comme de la présence pour les charges
+  // (nuits, N1, repas, soirées…) afin qu'un agent absent rattrape ensuite ; pas pour les heures
+  // (un congé est crédité comme du temps de travail).
+  function effDays(c, cfg, key) {
+    const credit = cfg.absenceCredit === undefined ? 1 : +cfg.absenceCredit;
+    return c.days + (key === 'hours' ? 0 : credit) * c.absDays;
+  }
+
   /* ---------- Génération d'un mois ---------- */
-  const DEFAULT_WEIGHTS = { hours: 0.125, night: 4, evening: 1, late: 3, early: 2, nightWE: 2, n1: 8, meal: 2, j2tot: 25, pref: 40 };
+  const DEFAULT_WEIGHTS = { hours: 0.125, night: 8, evening: 1, late: 3, early: 2, nightWE: 2, n1: 8, meal: 2, j2tot: 25, pref: 40, n1Extra: 40 };
+  // Rythme de rattrapage : l'équité se fait sur l'année, pas en un mois. Au plus maxNightsMonth nuits par agent et par mois,
+  // une N1 par mois (une 2e seulement exceptionnellement, coût n1Extra), jamais plus de maxN1Month.
+  const CAP_PENALTY = 1e4;
+  function caps(cfg) { return { nights: cfg.maxNightsMonth === undefined ? 3 : +cfg.maxNightsMonth, n1: cfg.maxN1Month === undefined ? 2 : +cfg.maxN1Month }; }
 
   function earlyLimit(cfg) {
     const m = /^(\d{1,2})[:h](\d{2})?$/i.exec(String(cfg.j2EarlyMax || '10:00').trim());
@@ -291,6 +303,11 @@
     const byDate = {};
     (history || []).forEach(function (d) { byDate[d.date] = d; });
     const days = [];
+    const CAP = caps(cfg);
+    const monthN = {}, monthN1 = {}; // nuits et N1 de chaque agent dans le mois en cours
+    cfg.agents.forEach(function (a) { monthN[a.id] = 0; monthN1[a.id] = 0; });
+    const n1Cost = function (id, cnt) { const c = cnt === undefined ? monthN1[id] : cnt; return c >= CAP.n1 ? CAP_PENALTY : (c >= 1 ? W.n1Extra : 0); };
+    const pinned = {}; // date -> agents dont la vacation est imposée ou verrouillée (intouchables au lissage)
 
     function availability(k) {
       const avail = [], absent = {};
@@ -304,9 +321,11 @@
     }
     function applyAssign(day, id, kind, rank, rangeStr) {
       day.assign[id] = { slot: kind === 'J0' ? 'J0' : kind + '-' + rank, kind: kind, rank: rank, range: rangeStr };
-      addAssignment(counters[id], slotMetrics(kind, rank, rangeStr, day.dayType, cfg), day.dayType);
+      const m = slotMetrics(kind, rank, rangeStr, day.dayType, cfg);
+      addAssignment(counters[id], m, day.dayType);
+      monthN[id] += m.night;
     }
-    function flag(day, id, f) { day.assign[id][f] = true; counters[id][f] += 1; }
+    function flag(day, id, f) { day.assign[id][f] = true; counters[id][f] += 1; if (f === 'n1') monthN1[id] += 1; }
 
     // Résout les vacations J1/J2/J3 d'un jour SANS modifier les compteurs (sert aussi aux simulations).
     function solve(k, dt, kind, avail, fixedList, opts) {
@@ -318,7 +337,7 @@
       const slots = [];
       for (let r = 1; r <= n; r++) slots.push({ rank: r, range: rangeOf(r) });
       const fixedRank = new Set(), taken = {}, free = [];
-      (fixedList || []).forEach(function (f) { fixedRank.add(f.rank); taken[f.id] = true; out.items.push(f); });
+      (fixedList || []).forEach(function (f) { fixedRank.add(f.rank); taken[f.id] = true; f.pinned = true; out.items.push(f); });
       avail.forEach(function (id) {
         if (taken[id]) return;
         const f = idx.fixed.get(id + '|' + k);
@@ -326,7 +345,7 @@
           const mm = /^(J[123])-(\d+)$/.exec(f);
           if (mm && mm[1] === kind && +mm[2] <= n && !fixedRank.has(+mm[2])) {
             fixedRank.add(+mm[2]);
-            out.items.push({ id: id, rank: +mm[2], range: rangeOf(+mm[2]) });
+            out.items.push({ id: id, rank: +mm[2], range: rangeOf(+mm[2]), pinned: true });
             return;
           }
           out.warnings.push('Créneau imposé « ' + f + ' » inapplicable pour ' + id + ' ce jour.');
@@ -335,19 +354,15 @@
       });
       const freeSlots = slots.filter(function (s) { return !fixedRank.has(s.rank); });
 
-      // taux d'équipe (hors renforts) : l'écart se mesure par jour travaillé, ou par nuit pour N1 / repas
+      // taux d'équipe (hors renforts) : l'écart se mesure par jour travaillé (N1 et repas compris : chaque agent,
+      // chef de tour ou non, doit en faire autant)
       const rt = {};
       ['hours', 'nights', 'evenings', 'late', 'early', 'nightWE', 'n1', 'meal'].forEach(function (key) {
         let s = 0, d = 0;
-        regular.forEach(function (id) { s += counters[id][key]; d += counters[id].days; });
+        regular.forEach(function (id) { s += counters[id][key]; d += effDays(counters[id], cfg, key); });
         rt[key] = d ? s / d : 0;
       });
-      const dev = function (id, key) { return renfortIds.has(id) ? 0 : counters[id][key] - rt[key] * counters[id].days; };
-      const devN = function (id, key) {
-        let s = 0, d = 0;
-        regular.forEach(function (x) { s += counters[x][key]; d += counters[x].nights; });
-        return renfortIds.has(id) ? 0 : counters[id][key] - (d ? s / d : 0) * counters[id].nights;
-      };
+      const dev = function (id, key) { return renfortIds.has(id) ? 0 : counters[id][key] - rt[key] * effDays(counters[id], cfg, key); };
 
       if (free.length) {
         const needCdt = !fixedRank.has(1);
@@ -360,6 +375,7 @@
               W.early * dev(id, 'early') * m.early + W.nightWE * dev(id, 'nightWE') * m.nightWE;
             if (m.night) {
               c += W.n1 * dev(id, 'n1') + W.meal * dev(id, 'meal');
+              if (!renfortIds.has(id) && monthN[id] >= CAP.nights) c += CAP_PENALTY;   // plafond mensuel de nuits
               if (opts.plan && opts.plan.indexOf(id) < 0) c += 1e5;      // équipe de nuit prévue la veille
               if (opts.noEarly && opts.noEarly(id)) c += W.j2tot;        // pas de J2 tôt la veille
             }
@@ -386,19 +402,19 @@
           cand.forEach(function (a) {
             cand.forEach(function (b) {
               if (a === b) return;
-              const c = W.n1 * devN(a.id, 'n1') + W.meal * devN(b.id, 'meal') + jn(a, 'n') + jn(b, 'm');
+              const c = W.n1 * dev(a.id, 'n1') + n1Cost(a.id) + W.meal * dev(b.id, 'meal') + jn(a, 'n') + jn(b, 'm');
               if (!best || c < best.c) best = { a: a, b: b, c: c };
             });
           });
           best.a.n1 = true; best.b.meal = true;
         } else {
           if (!hasN1 && cand.length) {
-            cand.sort(function (a, b) { return devN(a.id, 'n1') + jn(a, 'n') - devN(b.id, 'n1') - jn(b, 'n'); });
+            cand.sort(function (a, b) { return W.n1 * dev(a.id, 'n1') + n1Cost(a.id) + jn(a, 'n') - W.n1 * dev(b.id, 'n1') - n1Cost(b.id) - jn(b, 'n'); });
             cand[0].n1 = true;
           }
           const c2 = plain();
           if (!hasMeal && c2.length) {
-            c2.sort(function (a, b) { return devN(a.id, 'meal') + jn(a, 'm') - devN(b.id, 'meal') - jn(b, 'm'); });
+            c2.sort(function (a, b) { return dev(a.id, 'meal') + jn(a, 'm') - dev(b.id, 'meal') - jn(b, 'm'); });
             c2[0].meal = true;
           }
         }
@@ -423,6 +439,28 @@
         if (cdtOf(id, k)) day.cdt[id] = true;
         (idx.prefs.get(id + '|' + k) || []).forEach(function (p) { day.prefs.push(p); });
       });
+
+      // Journée figée : conservée telle quelle (vacations, N1, repas, verrous), seuls les compteurs sont mis à jour
+      const prevF = prevByDate && prevByDate[k];
+      if (prevF && prevF.frozen) {
+        if (prevF.role !== role) {
+          day.warnings.push('Journée figée ignorée : le rôle du jour a changé (' + prevF.role + ' → ' + role + ').');
+        } else {
+          day.frozen = true;
+          Object.keys(prevF.assign).forEach(function (id) {
+            const a = prevF.assign[id];
+            if (!counters[id]) { day.warnings.push('Journée figée : agent ' + id + ' inconnu, vacation retirée.'); return; }
+            applyAssign(day, id, a.kind, a.rank, a.range);
+            if (a.n1) flag(day, id, 'n1');
+            if (a.meal) flag(day, id, 'meal');
+            if (avail.indexOf(id) < 0) day.warnings.push('Journée figée : ' + id + ' est indisponible d\'après les demandes (vacation conservée).');
+          });
+          if (role !== 'J0') avail.forEach(function (id) { if (!day.assign[id]) day.warnings.push('Journée figée : ' + id + ' est disponible mais n\'a pas de vacation.'); });
+          if (prevF.nextNight) day.nextNight = prevF.nextNight.slice();
+          if (prevF.lockedAgents) day.lockedAgents = Object.assign({}, prevF.lockedAgents);
+          continue;
+        }
+      }
 
       if (role === 'J0') {
         const pool0 = avail.filter(function (id) { return !renfortIds.has(id); });
@@ -488,12 +526,130 @@
 
       const res = solve(k, dt, kind, avail, fixedList, { plan: plan, noEarly: noEarly, early: early });
       res.warnings.forEach(function (w) { day.warnings.push(w); });
+      pinned[k] = {};
       res.items.forEach(function (it) {
+        if (it.pinned) pinned[k][it.id] = true;
         applyAssign(day, it.id, kind, it.rank, it.range);
         if (it.n1) flag(day, it.id, 'n1');
         if (it.meal) flag(day, it.id, 'meal');
       });
     }
+
+    /* ---------- Lissage du mois ----------
+     * L'affectation jour par jour est gloutonne : elle ne voit pas la fin du mois. On reprend donc le mois
+     * entier et on échange des vacations (ou la N1 / le repas) entre deux agents d'un même jour tant que
+     * cela réduit l'écart global au taux d'équipe (somme pondérée des écarts au carré), sans toucher aux
+     * journées figées, vacations verrouillées ou imposées, au rang 1 chef de tour, ni au J0 après N1. */
+    (function refine() {
+      const KEYS = [['hours', 'hours'], ['nights', 'night'], ['evenings', 'evening'], ['late', 'late'], ['early', 'early'], ['nightWE', 'nightWE'], ['n1', 'n1'], ['meal', 'meal']];
+      const rt = {};
+      KEYS.forEach(function (kw) {
+        let s = 0, d = 0;
+        regular.forEach(function (id) { s += counters[id][kw[0]]; d += effDays(counters[id], cfg, kw[0]); });
+        rt[kw[0]] = d ? s / d : 0;
+      });
+      const load = function (id) { // écart global d'un agent
+        const c = counters[id];
+        let f = 0;
+        KEYS.forEach(function (kw) { const d = c[kw[0]] - rt[kw[0]] * effDays(c, cfg, kw[0]); f += W[kw[1]] / 2 * d * d; });
+        if (!renfortIds.has(id)) {
+          f += Math.max(0, monthN[id] - CAP.nights) * CAP_PENALTY;
+          for (let x = 1; x < monthN1[id]; x++) f += n1Cost(id, x);   // 2e N1 : exceptionnelle ; au-delà du plafond : interdite
+        }
+        return f;
+      };
+      const metricsOf = function (day, a) { return slotMetrics(a.kind, a.rank, a.range, day.dayType, cfg); };
+      const count = function (day, id, sign) { // ajoute (+1) ou retire (-1) la vacation des compteurs
+        const a = day.assign[id], m = metricsOf(day, a), c = counters[id];
+        c.hours += sign * m.hours; c.nights += sign * m.night; c.evenings += sign * m.evening; c.nightWE += sign * m.nightWE;
+        c.late += sign * m.late; c.early += sign * m.early;
+        if (a.n1) c.n1 += sign;
+        if (a.meal) c.meal += sign;
+        monthN[id] += sign * m.night;
+        if (a.n1) monthN1[id] += sign;
+      };
+      const isNight = function (day, id) { const a = day && day.assign[id]; return !!a && a.kind === 'J3' && a.rank <= cfg.nightCount; };
+      // règles souples d'un agent ce jour-là : souhaits / évitements, J2 tôt la veille d'une nuit
+      const soft = function (day, id) {
+        const a = day.assign[id], m = metricsOf(day, a);
+        let c = 0;
+        (idx.prefs.get(id + '|' + day.date) || []).forEach(function (p) { if (matchesPref(p.value, m)) c += (p.type === 'VEUT' ? -W.pref : W.pref); });
+        if (day.role === 'J3' && m.night) {
+          const pd = byDate[addDays(day.date, -1)];
+          if (pd && pd.role === 'J2' && !isEarlyJ2(pd.assign[id], cfg)) c += W.j2tot;
+        }
+        if (day.role === 'J2' && !isEarlyJ2(a, cfg)) {
+          const nd = byDate[addDays(day.date, 1)];
+          const nightNext = nd ? isNight(nd, id) : (day.nextNight || []).indexOf(id) >= 0;
+          if (nightNext) c += W.j2tot;
+        }
+        return c;
+      };
+      const j0After = function (day) { // agent du J0 qui clôt le cycle de ce J3
+        for (let b = 1; b <= 7; b++) {
+          const nd = byDate[addDays(day.date, b)];
+          if (nd && nd.role === 'J0') return Object.keys(nd.assign)[0] || null;
+          if (nd && nd.role === 'J1') return null;
+        }
+        return null;
+      };
+      const cost = function (day, a, b) { return load(a) + load(b) + soft(day, a) + soft(day, b); };
+      const EPS = 1e-6;
+      // essaie une modification ; la garde si elle améliore, sinon l'annule
+      const attempt = function (day, a, b, apply, undo) {
+        const before = cost(day, a, b);
+        count(day, a, -1); count(day, b, -1);
+        apply();
+        count(day, a, 1); count(day, b, 1);
+        if (cost(day, a, b) < before - EPS) return true;
+        count(day, a, -1); count(day, b, -1);
+        undo();
+        count(day, a, 1); count(day, b, 1);
+        return false;
+      };
+      const work = days.filter(function (d) { return !d.frozen && (d.role === 'J1' || d.role === 'J2' || d.role === 'J3') && pinned[d.date]; });
+      let improved = true, pass = 0;
+      while (improved && pass++ < 60) {
+        improved = false;
+        work.forEach(function (day) {
+          const free = Object.keys(day.assign).filter(function (id) { return !pinned[day.date][id] && !renfortIds.has(id); }).sort();
+          const cdtHere = function (id) { return !!day.cdt[id]; };
+          const j0id = day.role === 'J3' ? j0After(day) : null;
+          for (let i = 0; i < free.length; i++) {
+            for (let j = i + 1; j < free.length; j++) {
+              const a = free[i], b = free[j], x = day.assign[a], y = day.assign[b];
+              // 1) échange des deux vacations complètes (N1 / repas suivent la vacation)
+              const cdtOk = (x.rank !== 1 || !cdtHere(a) || cdtHere(b)) && (y.rank !== 1 || !cdtHere(b) || cdtHere(a));
+              const j0Ok = !j0id || !((j0id === a && y.n1) || (j0id === b && x.n1));
+              if (cdtOk && j0Ok && (x.range !== y.range || !!x.n1 !== !!y.n1 || !!x.meal !== !!y.meal || isNight(day, a) !== isNight(day, b))) {
+                const sw = function () { const t = day.assign[a]; day.assign[a] = day.assign[b]; day.assign[b] = t; };
+                if (attempt(day, a, b, sw, sw)) { improved = true; continue; }
+              }
+              // 2) nuit : la N1 ou le repas change d'agent (les rangs restent en place)
+              if (day.role === 'J3' && isNight(day, a) && isNight(day, b)) {
+                const p = day.assign[a], q = day.assign[b];
+                const flags = function (pa, pb) { return function () { p.n1 = pa[0]; p.meal = pa[1]; q.n1 = pb[0]; q.meal = pb[1]; ['n1', 'meal'].forEach(function (f) { if (!p[f]) delete p[f]; if (!q[f]) delete q[f]; }); }; };
+                const cur = [[!!p.n1, !!p.meal], [!!q.n1, !!q.meal]];
+                if ((cur[0][0] !== cur[1][0] || cur[0][1] !== cur[1][1]) && !(j0id && ((j0id === a && q.n1) || (j0id === b && p.n1)))) {
+                  if (attempt(day, a, b, flags(cur[1], cur[0]), flags(cur[0], cur[1]))) improved = true;
+                }
+              }
+            }
+          }
+        });
+      }
+      // le plan de nuit mémorisé la veille suit l'équipe de nuit finale
+      days.forEach(function (d) {
+        const nd = byDate[addDays(d.date, 1)];
+        if (d.role !== 'J2' || d.frozen || !d.nextNight || !nd || nd.role !== 'J3' || !Object.keys(nd.assign).length) return;
+        d.nextNight = Object.keys(nd.assign).filter(function (id) { return isNight(nd, id); }).sort();
+      });
+    })();
+    cfg.agents.forEach(function (a) {
+      if (a.renfort) return;
+      if (monthN[a.id] > CAP.nights) warnings.push(a.id + ' : ' + monthN[a.id] + ' nuits ce mois (plafond ' + CAP.nights + ', dépassement inévitable : effectif insuffisant ou journées imposées).');
+      if (monthN1[a.id] > CAP.n1) warnings.push(a.id + ' : ' + monthN1[a.id] + ' N1 ce mois (plafond ' + CAP.n1 + ', dépassement inévitable).');
+    });
     days.forEach(checkCdt);
     return { month: month, days: days, warnings: warnings, generatedAt: new Date().toISOString() };
   }
@@ -517,12 +673,66 @@
     day.lockedAgents[a] = true; day.lockedAgents[b] = true;
   }
 
+  /* ---------- Mail de dépôt des demandes d'absence ---------- */
+  const MAIL_TITLES = { C: 'Congés', REC: 'Récupérations', FORM: 'Formations', ABS: 'Autres absences' };
+  function fmtFr(k) { return k.slice(8, 10) + '/' + k.slice(5, 7) + '/' + k.slice(0, 4); }
+  // opts : types, from, to, onlyUnsent, greeting, signature, subject
+  function buildLeaveMail(cfg, requests, opts) {
+    opts = opts || {};
+    const types = opts.types && opts.types.length ? opts.types : Object.keys(MAIL_TITLES);
+    const items = [];
+    (requests || []).forEach(function (r, i) {
+      const type = normalizeType(r.type), from = normalizeDate(r.from), to = normalizeDate(r.to) || from;
+      if (!type || !from || !MAIL_TITLES[type] || types.indexOf(type) < 0) return;
+      if (opts.onlyUnsent && r.sent) return;
+      if (opts.from && to < opts.from) return;
+      if (opts.to && from > opts.to) return;
+      items.push({ i: i, type: type, agent: String(r.agent || '').trim(), from: from, to: to < from ? from : to, note: String(r.note || '').trim() });
+    });
+    if (!items.length) return { subject: '', body: '', included: [], count: 0 };
+    items.sort(function (a, b) {
+      return a.from < b.from ? -1 : a.from > b.from ? 1 : a.to < b.to ? -1 : a.to > b.to ? 1 : a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0;
+    });
+    const mn = items.reduce(function (m, x) { return x.from < m ? x.from : m; }, items[0].from);
+    const mx = items.reduce(function (m, x) { return x.to > m ? x.to : m; }, items[0].to);
+    const roles = buildRoles(cfg.cycle, mn, mx);
+    const vacations = function (it) { // vacations de cycle (J1/J2/J3) couvertes par la demande
+      if (it.from < cfg.cycle.anchor) return null;
+      const list = [];
+      for (let k = it.from, g = 0; k <= it.to && g < 800; k = addDays(k, 1), g++) { if (roles[k] === 'J1' || roles[k] === 'J2' || roles[k] === 'J3') list.push(roles[k]); }
+      return list;
+    };
+    const line = function (it) {
+      const v = vacations(it), n = daysBetween(it.from, it.to) + 1;
+      let when;
+      if (it.from === it.to) when = 'le ' + fmtFr(it.from) + (v ? (v.length ? ' (' + v[0] + ')' : ' (jour OFF)') : '');
+      else when = 'du ' + fmtFr(it.from) + ' au ' + fmtFr(it.to) + ' (' + n + ' jours' + (v ? (v.length ? ', dont ' + v.length + ' vacation' + (v.length > 1 ? 's' : '') + ' de cycle' : ', aucune vacation de cycle') : '') + ')';
+      return '- ' + it.agent + ' : ' + when + (it.note ? ' — ' + it.note : '');
+    };
+    const present = [], parts = [];
+    ['C', 'REC', 'FORM', 'ABS'].forEach(function (t) {
+      const g = items.filter(function (x) { return x.type === t; });
+      if (!g.length) return;
+      present.push(MAIL_TITLES[t].toLowerCase());
+      parts.push(MAIL_TITLES[t].toUpperCase() + ' (' + g.length + ')\n' + g.map(line).join('\n'));
+    });
+    const greeting = opts.greeting === undefined ? 'Bonjour,' : opts.greeting;
+    const signature = opts.signature === undefined ? 'Cordialement,' : opts.signature;
+    const lines = [];
+    if (greeting) lines.push(greeting, '');
+    lines.push('Veuillez trouver ci-dessous les demandes de l\'équipe à enregistrer :', '', parts.join('\n\n'));
+    if (signature) lines.push('', signature);
+    const period = mn === mx ? 'le ' + fmtFr(mn) : 'du ' + fmtFr(mn) + ' au ' + fmtFr(mx);
+    return { subject: opts.subject || ('Demandes de ' + present.join(' / ') + ' — ' + period), body: lines.join('\n'), included: items.map(function (x) { return x.i; }), count: items.length };
+  }
+
   return {
+    buildLeaveMail: buildLeaveMail,
     DEFAULT_TABLES: DEFAULT_TABLES, DEFAULT_WEIGHTS: DEFAULT_WEIGHTS, DAY_TYPE_LABEL: DAY_TYPE_LABEL,
     parseRange: parseRange, fmtRange: fmtRange, parseKey: parseKey, toKey: toKey, addDays: addDays, dow: dow,
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
     buildRoles: buildRoles, slotMetrics: slotMetrics, computeCounters: computeCounters, generateMonth: generateMonth,
-    swapAgents: swapAgents, checkCdt: checkCdt, hungarian: hungarian, ZERO: ZERO
+    swapAgents: swapAgents, caps: caps, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };
 });

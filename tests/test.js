@@ -1,0 +1,226 @@
+const P = require('../planner.js');
+const assert = require('assert');
+
+const cfg = {
+  agents: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'].map(id => ({ id, renfort: false, cdt: id === 'A1' || id === 'A4' }))
+    .concat([{ id: 'R1', renfort: true, cdt: false }]),
+  tables: P.DEFAULT_TABLES,
+  cycle: { anchor: '2027-01-01', normal: ['J1', 'J2', 'J3', 'OFF', 'OFF', 'OFF'], optionPeriods: [{ from: '2027-06-01', to: '2027-09-30' }] },
+  holidays: [], minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j2EarlyMax: '10:00', weights: {}
+};
+
+// ---- cycle : longueur inchangée, J0 sur le dernier OFF avant le J1 en période d'option
+const R = P.buildRoles(cfg.cycle, '2027-01-01', '2027-12-31');
+Object.keys(R).sort().forEach((k, i) => {
+  if (k > '2027-12-31') return;
+  const base = ['J1', 'J2', 'J3', 'OFF', 'OFF', 'OFF'][i % 6];
+  const exp = (base === 'OFF' && i % 6 === 5 && k >= '2027-06-01' && k <= '2027-09-30') ? 'J0' : base;
+  assert.strictEqual(R[k], exp, k);
+});
+
+// ---- demandes pseudo-aléatoires
+let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const requests = [];
+for (let i = 0; i < 40; i++) {
+  const a = 'A' + (1 + Math.floor(rnd() * 7));
+  const d = P.addDays('2027-01-01', Math.floor(rnd() * 360));
+  requests.push({ agent: a, from: d, to: P.addDays(d, Math.floor(rnd() * 6)), type: 'C' });
+}
+requests.push({ agent: 'R1', from: '2027-01-02', to: '2027-01-02', type: 'RENFORT' }, { agent: 'R1', from: '2027-03-10', to: '2027-03-12', type: 'RENFORT' },
+  { agent: 'A2', from: '2027-02-01', to: '2027-02-28', type: 'CDT' },
+  { agent: 'A5', from: '2027-06-05', to: '2027-06-05', type: 'VEUT', value: 'j0' }, { agent: 'A1', from: '2027-06-11', to: '2027-06-11', type: 'EVITE', value: 'j0' },
+  { agent: 'A3', from: '2027-01-05', to: '2027-01-05', type: 'EVITE', value: 'nuit' });
+
+// ---- génération de l'année
+const hist = (all, m) => all.filter(d => d.date >= P.addDays(P.monthRange(m)[0], -8));
+let all = []; const bases = {};
+for (let m = 1; m <= 12; m++) {
+  const month = '2027-' + String(m).padStart(2, '0');
+  const base = P.computeCounters(all, cfg, {}); bases[month] = base;
+  const res = P.generateMonth(cfg, requests, base, month, null, hist(all, month));
+  res.days.forEach(d => {
+    if (d.role === 'OFF') return;
+    if (d.role === 'J0') { assert.strictEqual(Object.keys(d.assign).length, 1); return; }
+    const reg = Object.keys(d.absent).filter(i => i !== 'R1').length;
+    assert.strictEqual(Object.keys(d.assign).length, 7 - reg + (d.assign.R1 ? 1 : 0), d.date);
+    Object.values(d.assign).map(a => a.rank).sort((a, b) => a - b).forEach((r, i) => assert.strictEqual(r, i + 1));
+    if (d.assign.R1) assert(['2027-01-02', '2027-03-10', '2027-03-11', '2027-03-12'].includes(d.date), 'renfort hors demande ' + d.date);
+  });
+  all = all.concat(res.days);
+}
+const byDate = Object.fromEntries(all.map(d => [d.date, d]));
+
+// ---- chef de tour : rang 1 toujours CDT quand un CDT est présent
+let noCdt = 0;
+all.forEach(d => {
+  if (d.role === 'OFF' || d.role === 'J0' || !Object.keys(d.assign).length) return;
+  const ids = Object.keys(d.assign), r1 = ids.find(i => d.assign[i].rank === 1);
+  if (ids.some(i => d.cdt[i])) assert(d.cdt[r1], 'rang 1 non CDT ' + d.date);
+  else { noCdt++; assert(d.warnings.some(w => w.startsWith('CDT : ')), 'alerte CDT ' + d.date); }
+});
+
+// ---- N1 / repas : un seul de chaque, deux agents différents, parmi les agents de nuit
+let nights = 0;
+all.filter(d => d.role === 'J3' && Object.keys(d.assign).length).forEach(d => {
+  const ids = Object.keys(d.assign), night = ids.filter(i => d.assign[i].rank <= cfg.nightCount);
+  const n1 = ids.filter(i => d.assign[i].n1), meal = ids.filter(i => d.assign[i].meal);
+  assert.strictEqual(n1.length, 1, 'N1 ' + d.date); assert.strictEqual(meal.length, night.length >= 2 ? 1 : 0, 'repas ' + d.date);
+  assert(night.includes(n1[0])); if (meal.length) { assert(night.includes(meal[0])); assert.notStrictEqual(n1[0], meal[0]); }
+  nights++;
+});
+
+// ---- J0 jamais attribué à l'agent N1 du J3 du même cycle (sauf alerte)
+let j0n = 0;
+all.filter(d => d.role === 'J0').forEach(d => {
+  const j3 = byDate[P.addDays(d.date, -3)], who = Object.keys(d.assign)[0];
+  if (j3 && j3.assign[who] && j3.assign[who].n1) assert(d.warnings.some(w => /N1/.test(w)), 'J0 après N1 sans alerte ' + d.date);
+  else j0n++;
+});
+
+// ---- J2 tôt la veille d'une nuit
+let nightAg = 0, withEarly = 0, planned = 0, planOk = 0;
+all.filter(d => d.role === 'J3').forEach(d => {
+  const pd = byDate[P.addDays(d.date, -1)]; if (!pd || pd.role !== 'J2') return;
+  const night = Object.keys(d.assign).filter(i => d.assign[i].rank <= cfg.nightCount);
+  night.forEach(i => { nightAg++; if (pd.assign[i] && P.slotMetrics && (() => { const a = pd.assign[i]; return a.kind === 'J2' && P.parseRange(a.range).start <= 600; })()) withEarly++; });
+  if (pd.nextNight) { planned++; if (night.slice().sort().join() === pd.nextNight.slice().sort().join()) planOk++; }
+});
+
+// ---- échange : seuls les 2 agents sont verrouillés, conservés à la régénération
+{
+  const month = '2027-02', base = bases[month], monthDays = all.filter(d => d.date.startsWith(month));
+  const d = monthDays.find(x => x.role === 'J1' && Object.keys(x.assign).length >= 4);
+  const copy = JSON.parse(JSON.stringify(d));
+  const [x, y] = Object.keys(copy.assign).slice(0, 2);
+  P.swapAgents(copy, x, y);
+  assert.deepStrictEqual(Object.keys(copy.lockedAgents).sort(), [x, y].sort());
+  const prev = Object.fromEntries(monthDays.map(z => [z.date, z.date === d.date ? copy : z]));
+  const res = P.generateMonth(cfg, requests, base, month, prev, hist(all.filter(z => z.date < month + '-01'), month));
+  const nd = res.days.find(z => z.date === d.date);
+  assert.strictEqual(nd.assign[x].slot, copy.assign[x].slot); assert.strictEqual(nd.assign[y].slot, copy.assign[y].slot);
+  assert.deepStrictEqual(Object.keys(nd.lockedAgents).sort(), [x, y].sort());
+  Object.values(nd.assign).map(a => a.rank).sort((a, b) => a - b).forEach((r, i) => assert.strictEqual(r, i + 1));
+  // N1/repas : l'échange déplace la vacation complète
+  const j3 = JSON.parse(JSON.stringify(monthDays.find(z => z.role === 'J3' && Object.keys(z.assign).length >= 4)));
+  const n1 = Object.keys(j3.assign).find(i => j3.assign[i].n1), plain = Object.keys(j3.assign).find(i => j3.assign[i].rank > cfg.nightCount);
+  P.swapAgents(j3, n1, plain); assert(j3.assign[plain].n1 && !j3.assign[n1].n1);
+  console.log('échange : OK (verrou limité à', x, 'et', y + ')');
+}
+
+// ---- journées figées : conservées à l'identique à la régénération, le reste est recalculé
+{
+  const month = '2027-02', base = bases[month], monthDays = all.filter(d => d.date.startsWith(month));
+  const copy = JSON.parse(JSON.stringify(monthDays));
+  const frozenDates = copy.filter(d => d.date <= '2027-02-14' && d.role !== 'OFF').map(d => { d.frozen = true; return d.date; });
+  const prev = Object.fromEntries(copy.map(z => [z.date, z]));
+  // des demandes changent après coup : un congé sur une journée figée et un sur une journée libre
+  const rq2 = requests.concat([{ agent: 'A6', from: '2027-02-09', to: '2027-02-09', type: 'C' }, { agent: 'A5', from: '2027-02-20', to: '2027-02-27', type: 'C' }]);
+  const res = P.generateMonth(cfg, rq2, base, month, prev, hist(all.filter(z => z.date < month + '-01'), month));
+  const sig = d => JSON.stringify(Object.keys(d.assign).sort().map(i => [i, d.assign[i].slot, !!d.assign[i].n1, !!d.assign[i].meal]));
+  frozenDates.forEach(k => {
+    const a = prev[k], b = res.days.find(z => z.date === k);
+    assert.strictEqual(sig(b), sig(a), 'journée figée modifiée ' + k); assert(b.frozen);
+  });
+  const dead = res.days.find(z => z.date === '2027-02-09');
+  if (dead.role !== 'OFF') assert(dead.warnings.some(w => /figée/.test(w) && /A6/.test(w)), 'alerte agent indisponible sur journée figée');
+  const free = res.days.filter(z => z.date > '2027-02-14' && z.role !== 'OFF');
+  free.forEach(z => { assert(!z.frozen); if (z.assign.A5 && z.date >= '2027-02-20' && z.date <= '2027-02-27') assert.fail('congé ignoré ' + z.date); });
+  console.log('figées :', frozenDates.length, 'journées conservées à l\'identique ; reste recalculé (', free.length, 'journées )');
+}
+
+// ---- rattrapage après absence : une agente absente tout janvier revient à parité sur les nuits
+{
+  const ids = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
+  const c2 = { ...cfg, agents: ids.map(id => ({ id, renfort: false, cdt: id === 'B3' || id === 'B1' })) };
+  const rq = [{ agent: 'B4', from: '2027-01-01', to: '2027-01-31', type: 'C' }];
+  const run = credit => {
+    const conf = { ...c2, absenceCredit: credit }; let d = [];
+    for (let m = 1; m <= 4; m++) { const mo = '2027-0' + m; d = d.concat(P.generateMonth(conf, rq, P.computeCounters(d, conf, {}), mo, null, d.filter(z => z.date >= P.addDays(P.monthRange(mo)[0], -8))).days); }
+    return P.computeCounters(d, conf, {});
+  };
+  const withCredit = run(1), without = run(0);
+  const others = ids.filter(i => i !== 'B4' && i !== 'B3' && i !== 'B1');
+  const avg = r => others.reduce((s, i) => s + r[i].nights, 0) / others.length;
+  console.log('rattrapage (4 mois, B4 absente en janvier) — B4:', withCredit.B4.nights, 'avec crédit |', without.B4.nights, 'sans | autres non-CDT en moyenne:', avg(withCredit).toFixed(1));
+  assert(withCredit.B4.nights >= avg(withCredit) - 1, 'B4 doit rattraper ses nuits');
+  assert(withCredit.B4.nights > without.B4.nights, 'le crédit d\'absence doit aider le rattrapage');
+}
+
+// ---- rythme de rattrapage : au plus 3 nuits et 2 N1 par agent et par mois, la 2e N1 reste exceptionnelle
+{
+  const ids = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
+  const c3 = { ...cfg, agents: ids.map((id, i) => ({ id, renfort: false, cdt: i < 3 })) };
+  const rq = [{ agent: 'B4', from: '2027-01-04', to: '2027-02-21', type: 'C' }, { agent: 'B5', from: '2027-10-04', to: '2027-11-14', type: 'C' }];
+  let d = [], over = 0, twoN1 = 0, natMonths = [];
+  for (let m = 1; m <= 12; m++) {
+    const mo = '2027-' + String(m).padStart(2, '0');
+    const res = P.generateMonth(c3, rq, P.computeCounters(d, c3, {}), mo, null, d.filter(z => z.date >= P.addDays(P.monthRange(mo)[0], -8)));
+    const mc = P.computeCounters(res.days, c3, {});
+    ids.forEach(i => { if (mc[i].nights > 3 || mc[i].n1 > 2) over++; if (mc[i].n1 === 2) twoN1++; });
+    natMonths.push(mc.B4.nights);
+    d = d.concat(res.days);
+  }
+  const fc = P.computeCounters(d, c3, {});
+  const rate = ids.reduce((s, i) => s + fc[i].nights, 0) / ids.reduce((s, i) => s + P.effDays(fc[i], c3, 'nights'), 0);
+  const natDev = fc.B4.nights - rate * P.effDays(fc.B4, c3, 'nights');
+  console.log('rythme : B4 (congés janv.-févr.) nuits par mois', natMonths.join(' '), '| écart fin d\'année', natDev.toFixed(1), '| mois à 2 N1 :', twoN1);
+  assert.strictEqual(over, 0, 'plafond mensuel de nuits / N1 dépassé');
+  assert(twoN1 <= 2, '2e N1 du mois trop fréquente');
+  assert(Math.max(...natMonths) <= 3);
+  assert(natDev > -2, 'B4 doit avoir rattrapé l\'essentiel de ses nuits sur l\'année');
+}
+
+// ---- mail de dépôt des demandes
+{
+  const rq = [
+    { agent: 'A1', from: '2027-01-12', to: '2027-01-16', type: 'C', note: 'vacances' },
+    { agent: 'A2', from: '2027-01-14', to: '2027-01-14', type: 'REC' },
+    { agent: 'A3', from: '2027-01-20', to: '2027-01-20', type: 'récup', sent: '2026-11-01' },
+    { agent: 'A4', from: '2027-02-03', to: '2027-02-04', type: 'FORM' },
+    { agent: 'A5', from: '2027-01-05', to: '2027-01-05', type: 'EVITE', value: 'nuit' }
+  ];
+  const m = P.buildLeaveMail(cfg, rq, { onlyUnsent: true });
+  assert.strictEqual(m.count, 3); assert.deepStrictEqual(m.included, [0, 1, 3]);
+  assert(/CONGÉS \(1\)/.test(m.body) && /RÉCUPÉRATIONS \(1\)/.test(m.body) && /FORMATIONS \(1\)/.test(m.body));
+  assert(m.body.includes('- A1 : du 12/01/2027 au 16/01/2027 (5 jours, dont 3 vacations de cycle) — vacances'), m.body);
+  assert(m.body.includes('- A2 : le 14/01/2027 (J2)'), m.body);
+  assert(!m.body.includes('A5') && !m.body.includes('A3'), 'souhait et demande déjà déposée exclus');
+  assert(m.subject.startsWith('Demandes de congés / récupérations / formations — du 12/01/2027 au 04/02/2027'), m.subject);
+  assert.strictEqual(P.buildLeaveMail(cfg, rq, { types: ['C'] }).count, 1);
+  assert.strictEqual(P.buildLeaveMail(cfg, rq, { from: '2027-02-01' }).count, 1);
+  assert.strictEqual(P.buildLeaveMail(cfg, rq, { onlyUnsent: false }).count, 4);
+  console.log('mail : OK\n' + m.body.split('\n').slice(0, 9).join('\n'));
+}
+
+// ---- synthèse
+const c = P.computeCounters(all, cfg, {});
+
+// ---- lissage mensuel : écart d'heures resserré, et aucune vacation imposée déplacée
+{
+  const reg = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'];
+  const rate = reg.reduce((s, i) => s + c[i].hours, 0) / reg.reduce((s, i) => s + P.effDays(c[i], cfg, 'hours'), 0);
+  const devs = reg.map(i => c[i].hours - rate * P.effDays(c[i], cfg, 'hours'));
+  const spreadH = Math.max(...devs) - Math.min(...devs);
+  console.log('lissage : écart max-min des heures (rapporté aux jours travaillés) =', spreadH.toFixed(1), 'h');
+  assert(spreadH < 5, 'écart d\'heures trop grand : ' + spreadH.toFixed(1));
+  // N1 : autant pour les chefs de tour (A1, A4) que pour les autres, même s'ils font plus de nuits
+  const n1s = reg.map(i => c[i].n1), avgN1 = g => g.reduce((s, i) => s + c[i].n1, 0) / g.length;
+  const gap = Math.abs(avgN1(['A1', 'A4']) - avgN1(['A2', 'A3', 'A5', 'A6', 'A7']));
+  console.log('N1 : CDT', avgN1(['A1', 'A4']).toFixed(1), '| non-CDT', avgN1(['A2', 'A3', 'A5', 'A6', 'A7']).toFixed(1), '| min-max', Math.min(...n1s) + '-' + Math.max(...n1s));
+  assert(gap <= 1, 'N1 inégales entre CDT et non-CDT'); assert(Math.max(...n1s) - Math.min(...n1s) <= 2, 'N1 mal réparties');
+  // repas : même règle que la N1
+  const meals = reg.map(i => c[i].meal), avgM = g => g.reduce((s, i) => s + c[i].meal, 0) / g.length;
+  console.log('repas : CDT', avgM(['A1', 'A4']).toFixed(1), '| non-CDT', avgM(['A2', 'A3', 'A5', 'A6', 'A7']).toFixed(1), '| min-max', Math.min(...meals) + '-' + Math.max(...meals));
+  assert(Math.abs(avgM(['A1', 'A4']) - avgM(['A2', 'A3', 'A5', 'A6', 'A7'])) <= 1, 'repas inégaux entre CDT et non-CDT'); assert(Math.max(...meals) - Math.min(...meals) <= 2, 'repas mal répartis');
+  const rqF = requests.concat([{ agent: 'A3', from: '2027-03-03', to: '2027-03-03', type: 'FIXE', value: 'J2-4' }]);
+  const res = P.generateMonth(cfg, rqF, bases['2027-03'], '2027-03', null, hist(all.filter(z => z.date < '2027-03-01'), '2027-03'));
+  const d = res.days.find(z => z.date === '2027-03-03');
+  assert.strictEqual(d.role, 'J2'); assert.strictEqual(d.assign.A3.slot, 'J2-4', 'créneau imposé déplacé par le lissage');
+  // déterministe : deux générations identiques donnent le même mois
+  const res2 = P.generateMonth(cfg, rqF, bases['2027-03'], '2027-03', null, hist(all.filter(z => z.date < '2027-03-01'), '2027-03'));
+  assert.strictEqual(JSON.stringify(res.days), JSON.stringify(res2.days));
+}
+console.table(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, { h: +v.hours.toFixed(1), nuits: v.nights, N1: v.n1, repas: v.meal, soir: v.evenings, nWE: v.nightWE, tard: v.late, tot: v.early, j0: v.j0, jours: v.days }])));
+console.log('nuits:', nights, '| jours sans CDT:', noCdt, '| J0 hors N1:', j0n);
+console.log('agents de nuit avec J2 tôt la veille:', withEarly + '/' + nightAg, '(' + Math.round(100 * withEarly / nightAg) + ' %) | équipe de nuit conforme au plan:', planOk + '/' + planned);
+console.log('OK');

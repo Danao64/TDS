@@ -1,0 +1,13 @@
+# Données nominatives : sauvegardes et exports de planning, jamais dans le dépôt
+*.json
+*.csv
+*.xlsx
+*.xls
+*.ics
+*.pdf
+
+# Système
+.DS_Store
+
+# Notes de travail locales (contiennent les trigrammes de l'équipe) : non publiées
+CLAUDE.md
