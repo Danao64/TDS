@@ -7,7 +7,7 @@
   const FIRST_MONTH = '2027-01', FIRST_DAY = '2027-01-01';
   const MONTHS_FR = ['JANVIER', 'FÉVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET', 'AOÛT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DÉCEMBRE'];
   const DOW = ['Di', 'Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa'];
-  const TYPES = { C: 'Congé', REC: 'Récup', FORM: 'Formation', ABS: 'Autre absence', RENFORT: 'Renfort disponible', VEUT: 'Souhaite', EVITE: 'Évite', FIXE: 'Créneau imposé', CDT: 'Chef de tour (sur la période)' };
+  const TYPES = { CF: 'Congé fractionné (CF)', CYC: 'Congé cycle (Cyc)', RS: 'Récup RS', RMT: 'Récup RMT', RPT: 'Récup RPT', REC: 'Récup (non précisée)', FORM: 'Formation (valeur : code, ex. GB)', ABS: 'Autre absence', RENFORT: 'Renfort disponible', VEUT: 'Souhaite', EVITE: 'Évite', FIXE: 'Créneau imposé', CDT: 'Chef de tour (sur la période)' };
   const COUNTER_FIELDS = [['hours', 'Heures'], ['nights', 'Nuits'], ['n1', 'N1 🌙'], ['meal', 'Repas 🍽️'], ['evenings', 'Soirées J3'], ['nightWE', 'Nuits WE/férié'], ['late', 'J2 tardifs'], ['early', 'Débuts tôt'], ['j0', 'J0']];
 
   /* ---------- État ---------- */
@@ -43,6 +43,7 @@
     if (state.cfg.weights && state.cfg.weights.night === 4) { state.cfg.weights.night = P.DEFAULT_WEIGHTS.night; migrated = true; }
     state.weightsVersion = 2;
   }
+  state.requests.forEach(function (r) { if (r.type === 'C') r.type = 'CF'; }); // ancien « Congé » = congé fractionné
   if (!state.cfg.j0RangeSunday) state.cfg.j0RangeSunday = '10:00-18:00'; // J0 du dimanche / férié (note de service)
   if (!state.cfg.tablesCreuse) state.cfg.tablesCreuse = JSON.parse(JSON.stringify(P.DEFAULT_TABLES_CREUSE)); // grilles de période creuse (ajout)
   delete state.cfg.equityPeriod; // ancien réglage « remise à zéro annuelle », retiré : les compteurs sont toujours cumulés
@@ -278,7 +279,7 @@
         if (as) {
           h += '<td class="k-' + as.kind + (d.frozen ? ' frozen' : '') + ((d.lockedAgents && d.lockedAgents[a.id]) || d.locked ? ' lock' : '') + '" title="' + esc(P.DAY_TYPE_LABEL[d.dayType]) + '"><b class="scr">' + esc(as.slot) + '</b>' + printSlotHtml(as) + '<small>' + P.fmtRange(as.range) + '</small></td>';
         } else if (d.absent[a.id]) {
-          h += '<td class="abs' + (d.frozen ? ' frozen' : '') + '">' + esc(d.absent[a.id]) + '</td>';
+          h += '<td class="abs' + (d.frozen ? ' frozen' : '') + '" title="' + esc(absText(d, a.id)) + '">' + esc(d.absent[a.id]) + '</td>';
         } else h += '<td class="off' + (d.frozen ? ' frozen' : '') + '"></td>';
       });
       h += '</tr>';
@@ -286,7 +287,13 @@
     return h + '</tbody></table></div><p class="print-legend"><span class="ico-chip">' + ICON_N1 + '</span> N1 · <span class="ico-chip">' + ICON_MEAL + '</span> repas · CDT = chef de tour · J1 / J2 / J3 = vacations du cycle · J0 = jour d\'option</p>';
   }
   /* ---------- Planning individuel : vue, impression, export calendrier (.ics) ---------- */
-  const ABS_LABEL = { C: 'Congé', REC: 'Récup', FORM: 'Formation', ABS: 'Absence' };
+  const ABS_NAME = { CF: 'Congé fractionné', CYC: 'Congé cycle', RS: 'Récup RS', RMT: 'Récup RMT', RPT: 'Récup RPT', REC: 'Récup', FORM: 'Formation', ABS: 'Absence',
+    C: 'Congé' }; // C : anciens plannings
+  function absText(d, id) { // libellé complet d'une absence (formation : « Formation GB »)
+    const code = d.absent[id], type = (d.absentType && d.absentType[id]) || code;
+    if (type === 'FORM') return code && code !== 'FORM' ? 'Formation ' + code : 'Formation';
+    return ABS_NAME[type] || code;
+  }
   const DOW_LONG = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
   function cdtSlot(slot) { return slot.replace(/-1$/, ' CDT'); }
   function agentLines(id, days) { // une ligne par jour où l'agent travaille ou est absent
@@ -294,7 +301,7 @@
     days.forEach(function (d) {
       const as = d.assign[id];
       if (as) out.push({ date: d.date, as: as, dayType: d.dayType });
-      else if (d.absent[id]) out.push({ date: d.date, abs: d.absent[id] });
+      else if (d.absent[id]) out.push({ date: d.date, abs: absText(d, id) });
     });
     return out;
   }
@@ -316,7 +323,7 @@
     h += '<table class="list agent-list"><thead><tr><th>Date</th><th>Vacation</th><th>Horaires</th><th>Nuit</th></tr></thead><tbody>';
     lines.forEach(function (l) {
       const day = DOW_LONG[P.dow(l.date)] + ' ' + (+l.date.slice(8)) + ' ' + MONTHS_FR[+l.date.slice(5, 7) - 1].toLowerCase();
-      if (l.abs) { h += '<tr class="abs"><td>' + day + '</td><td colspan="3">' + esc(ABS_LABEL[l.abs] || l.abs) + '</td></tr>'; return; }
+      if (l.abs) { h += '<tr class="abs"><td>' + day + '</td><td colspan="3">' + esc(l.abs) + '</td></tr>'; return; }
       const sym = (l.as.n1 ? ICON_N1 + ' N1' : '') + (l.as.meal ? ICON_MEAL + ' repas' : '');
       h += '<tr class="k-' + l.as.kind + '"><td>' + day + '</td><td><b>' + esc(cdtSlot(l.as.slot)) + '</b></td><td>' + P.fmtRange(l.as.range) + '</td><td class="agent-sym">' + sym + '</td></tr>';
     });
@@ -344,7 +351,7 @@
         const uid = 'tds-' + id + '-' + l.date + '@planning-tds';
         if (l.abs) {
           ev.push(['BEGIN:VEVENT', 'UID:' + uid, 'DTSTAMP:' + stamp, 'DTSTART;VALUE=DATE:' + l.date.replace(/-/g, ''), 'DTEND;VALUE=DATE:' + P.addDays(l.date, 1).replace(/-/g, ''),
-            'SUMMARY:' + icsText(ABS_LABEL[l.abs] || l.abs), 'TRANSP:TRANSPARENT', 'END:VEVENT']);
+            'SUMMARY:' + icsText(l.abs), 'TRANSP:TRANSPARENT', 'END:VEVENT']);
           return;
         }
         const r = P.parseRange(l.as.range);
@@ -590,7 +597,7 @@
       '<button class="btn sec" data-act="req-template">Télécharger le modèle CSV</button>' +
       '<button class="btn" data-act="mail-toggle">✉ Générer le mail de dépôt</button>' +
       '<button class="btn sec danger" data-act="req-clear">Tout supprimer</button></div>' +
-      '<p class="muted">Types : congé (C), récup (REC), formation (FORM), autre absence (ABS) → l\'agent ne travaille pas ; <b>Souhaite / Évite</b> avec une valeur parmi <code>nuit</code>, <code>soiree</code>, <code>tot</code>, <code>tard</code>, <code>j0</code> (le souhait ou l\'évitement J0 ne compte que les jours où un J0 existe) ; <b>Créneau imposé</b> avec une valeur du type <code>J2-3</code> ou <code>J0</code> ; <b>Renfort disponible</b> pour les agents marqués « renfort » dans les paramètres : un renfort n\'est <b>jamais</b> planifié en dehors des jours saisis ici. <b>Chef de tour</b> : l\'agent est considéré CDT sur la période, en plus de la case des paramètres.</p></div>';
+      '<p class="muted">Absences (l\'agent ne travaille pas) : <b>congé fractionné (CF)</b> sur les jours saisis ; <b>congé cycle (Cyc)</b> : il suffit de saisir une date du cycle, le congé couvre les 6 jours du cycle (affiché « Cyc » sur J1, J2, J3 ; l\'agent ne peut pas faire le J0 du 6e jour) ; <b>récups RS, RMT, RPT</b> ; <b>formation</b> avec son code en valeur (ex. <code>GB</code>, affiché tel quel dans le planning) ; autre absence (ABS) ; <b>Souhaite / Évite</b> avec une valeur parmi <code>nuit</code>, <code>soiree</code>, <code>tot</code>, <code>tard</code>, <code>j0</code> (le souhait ou l\'évitement J0 ne compte que les jours où un J0 existe) ; <b>Créneau imposé</b> avec une valeur du type <code>J2-3</code> ou <code>J0</code> ; <b>Renfort disponible</b> pour les agents marqués « renfort » dans les paramètres : un renfort n\'est <b>jamais</b> planifié en dehors des jours saisis ici. <b>Chef de tour</b> : l\'agent est considéré CDT sur la période, en plus de la case des paramètres.</p></div>';
     h += mailPanelHtml();
     h += '<div class="card" style="overflow:auto"><table class="list"><thead><tr><th>Agent</th><th>Du</th><th>Au</th><th>Type</th><th>Valeur</th><th>Note</th><th title="Demande déjà déposée auprès de l\'administration">Déposée</th><th title="Effectif les jours de cycle couverts par la demande">Contrôle</th><th></th></tr></thead><tbody>';
     const chk = requestChecks();
@@ -624,13 +631,13 @@
   }
   /* ---------- Ordre d'affichage : les dernières demandes en haut ---------- */
   /* ---------- Contrôle des demandes d'absence : effectif des jours couverts ---------- */
-  const ABS_TYPES = ['C', 'REC', 'FORM', 'ABS'];
+  const ABS_TYPES = P.ABSENCE_TYPES;
   function requestChecks() { // index de la demande -> jours à problème (ou [] si tout va bien, null si sans objet)
     const out = {}, abs = [];
     state.requests.forEach(function (r, i) {
-      const t = P.normalizeType(r.type), f = P.normalizeDate(r.from), to = P.normalizeDate(r.to) || f;
-      if (ABS_TYPES.indexOf(t) < 0 || !f) { out[i] = null; return; }
-      abs.push({ i: i, from: f, to: to < f ? f : to });
+      const sp = P.requestSpan(state.cfg, r);
+      if (!sp || ABS_TYPES.indexOf(sp.type) < 0) { out[i] = null; return; }
+      abs.push({ i: i, from: sp.from, to: sp.to, cyc: sp.type === 'CYC' });
     });
     if (!abs.length) return out;
     const from = abs.reduce(function (m, x) { return x.from < m ? x.from : m; }, abs[0].from);
@@ -642,6 +649,7 @@
         const d = days[k];
         if (d && d.problems.length) bad.push({ date: k, role: d.role, problems: d.problems });
       }
+      bad.cycle = x.cyc ? [x.from, x.to] : null;
       out[x.i] = bad;
     });
     return out;
@@ -649,9 +657,10 @@
   function fmtDay(k) { return DOW[P.dow(k)] + ' ' + k.slice(8) + '/' + k.slice(5, 7); }
   function checkCell(bad) {
     if (bad === null || bad === undefined) return '<td></td>';
-    if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant et chef de tour présent tous les jours de cycle couverts">✓</td>';
+    const cyc = bad.cycle ? '<small class="muted">cycle du ' + fmtDay(bad.cycle[0]) + ' au ' + fmtDay(bad.cycle[1]) + '</small><br>' : '';
+    if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant et chef de tour présent tous les jours de cycle couverts">' + cyc + '✓</td>';
     const txt = bad.map(function (b) { return fmtDay(b.date) + ' (' + b.role + ') : ' + b.problems.join(', '); });
-    return '<td class="chk-bad" title="' + esc(txt.join('\n')) + '">⚠ ' + esc(txt[0]) + (txt.length > 1 ? ' <small>+' + (txt.length - 1) + ' jour(s)</small>' : '') + '</td>';
+    return '<td class="chk-bad" title="' + esc(txt.join('\n')) + '">' + cyc + '⚠ ' + esc(txt[0]) + (txt.length > 1 ? ' <small>+' + (txt.length - 1) + ' jour(s)</small>' : '') + '</td>';
   }
   const REQ_NEUTRAL = ['note', 'sent']; // champs sans effet sur le planning
   function reqMonth(r) { const d = P.normalizeDate(r.from); return d ? d.slice(0, 7) : null; }
@@ -801,8 +810,10 @@
   function requestTemplate() {
     const a = ids()[0] || 'AG1', b = ids()[1] || 'AG2';
     const rows = [['agent', 'debut', 'fin', 'type', 'valeur', 'note'],
-      [a, '2027-01-12', '2027-01-16', 'C', '', 'congés'],
-      [b, '2027-01-19', '2027-01-19', 'REC', '', ''],
+      [a, '2027-01-12', '2027-01-16', 'CF', '', 'congé fractionné'],
+      [b, '2027-02-02', '2027-02-02', 'CYC', '', 'congé cycle (une date du cycle suffit)'],
+      [b, '2027-01-19', '2027-01-19', 'RS', '', ''],
+      [a, '2027-01-20', '2027-01-20', 'FORM', 'GB', 'formation'],
       [a, '2027-01-25', '2027-01-25', 'EVITE', 'nuit', ''],
       [b, '2027-01-26', '2027-01-26', 'VEUT', 'tot', ''],
       [a, '2027-06-05', '2027-06-05', 'EVITE', 'j0', ''],
@@ -962,7 +973,7 @@
       case 'print-pdf': printPlanning(); break;
       case 'swap': doSwap(false); break;
       case 'unlock': doSwap(true); break;
-      case 'req-add': pushUndo('ajout d\'une demande'); state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'C', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([ui.month]); save(); renderRequests(); break;
+      case 'req-add': pushUndo('ajout d\'une demande'); state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'CF', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([ui.month]); save(); renderRequests(); break;
       case 'req-del': pushUndo('suppression d\'une demande de ' + (state.requests[+t.dataset.i] || {}).agent); requestChanged([reqMonth(state.requests[+t.dataset.i])]); state.requests.splice(+t.dataset.i, 1); save(); renderRequests(); break;
       case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { pushUndo('suppression de toutes les demandes'); requestChanged(state.requests.map(reqMonth)); state.requests = []; save(); renderRequests(); } break;
       case 'regen-stale': regenStale(); break;

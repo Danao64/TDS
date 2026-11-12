@@ -22,6 +22,13 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 4. **Statistiques** : cumul par agent (heures, nuits, soirées, nuits WE/férié, J2 tardifs, débuts tôt, J0…) avec écart au taux d'équipe.
 5. **Données** : sauvegarde / restauration JSON. Générez les mois dans l'ordre : chaque mois s'appuie sur les compteurs des précédents.
 
+**Types d'absence** (onglet Demandes) :
+- **Congé fractionné (CF)** : sur les jours saisis (c'est l'ancien « Congé » ; les demandes existantes sont converties automatiquement).
+- **Congé cycle (Cyc)** : une seule date du cycle suffit, le congé couvre les 6 jours du cycle (du J1 au 6e jour). Il n'est affiché « Cyc » que sur les jours officiellement travaillés (J1, J2, J3) ; le 6e jour, l'agent n'est pas disponible pour le J0. Seuls les 3 jours travaillés comptent comme jours d'absence pour l'équité.
+- **Récups RS, RMT, RPT** : utilisables comme absences ; leurs règles propres seront ajoutées plus tard. « Récup (non précisée) » reste disponible pour les anciennes demandes.
+- **Formation** : saisir le code de la formation en valeur (ex. `GB`) ; c'est ce code qui s'affiche dans le planning (« Formation GB » au survol, dans le planning individuel et le calendrier).
+- Le mail de dépôt regroupe congés, récupérations et formations, et précise le type (CF, congé cycle, RS…, code de formation) ; un congé cycle y apparaît sur ses 6 jours.
+
 **Horaire du J0** (JE de la note de service) : 10h00-18h30 du lundi au samedi, **10h00-18h00 le dimanche et les jours fériés** ; les deux horaires sont réglables dans Paramètres.
 
 **Grilles horaires** : pendant une période d'option (J0), les horaires sont ceux de la grille « NORMALE AVEC TDS OPTION 1 » (note de service TDS LFBO, pages 3 à 5). **Tout jour hors période d'option est en période creuse** et utilise la grille « TDS socle hors option 1 » (pages 6 à 8 : J1 07h00-15h00, J2 11h00-20h00, nuits 20h00-07h00, soirées 15h00-00h00, avec les variantes du samedi et du dimanche / férié). Les deux grilles sont modifiables dans Paramètres ; le bandeau d'infos du Planning indique la période du mois affiché.

@@ -182,7 +182,11 @@
 
   /* ---------- Demandes ---------- */
   const TYPE_ALIASES = {
-    c: 'C', conge: 'C', conges: 'C', cp: 'C',
+    // congés : fractionné (CF, type par défaut, ancien « C ») ou cycle complet (Cyc)
+    c: 'CF', cf: 'CF', conge: 'CF', conges: 'CF', cp: 'CF', fractionne: 'CF', 'conge fractionne': 'CF',
+    cyc: 'CYC', cycle: 'CYC', 'conge cycle': 'CYC',
+    // récupérations : RS, RMT, RPT (règles propres à venir) ; REC = récup non précisée (anciennes demandes)
+    rs: 'RS', rmt: 'RMT', rpt: 'RPT',
     rec: 'REC', recup: 'REC', rcp: 'REC', recuperation: 'REC',
     form: 'FORM', formation: 'FORM',
     abs: 'ABS', absence: 'ABS', autre: 'ABS', indispo: 'ABS',
@@ -193,24 +197,44 @@
     cdt: 'CDT', 'chef de tour': 'CDT', chef: 'CDT'
   };
   function normalizeType(t) { return TYPE_ALIASES[normValue(t)] || null; }
-  const ABSENCE_TYPES = ['C', 'REC', 'FORM', 'ABS'];
+  const ABSENCE_TYPES = ['CF', 'CYC', 'RS', 'RMT', 'RPT', 'REC', 'FORM', 'ABS'];
+  // Libellé affiché dans le planning (une formation affiche son code, ex. « GB »)
+  const ABSENCE_CODE = { CF: 'CF', CYC: 'Cyc', RS: 'RS', RMT: 'RMT', RPT: 'RPT', REC: 'REC', FORM: 'FORM', ABS: 'ABS' };
+  function absenceLabel(type, value) {
+    const v = String(value || '').trim();
+    return type === 'FORM' && v ? v : ABSENCE_CODE[type] || type;
+  }
+  // Cycle (6 jours, du J1 au 6e jour) contenant la date k
+  function cycleSpan(cfg, k) {
+    const L = cfg.cycle.normal.length, pos = ((daysBetween(cfg.cycle.anchor, k) % L) + L) % L, start = addDays(k, -pos);
+    return [start, addDays(start, L - 1)];
+  }
+  // Période réellement couverte par une demande : un congé cycle s'étend aux cycles complets touchés.
+  function requestSpan(cfg, r) {
+    const type = normalizeType(r.type), from = normalizeDate(r.from);
+    let to = normalizeDate(r.to) || from;
+    if (!type || !from) return null;
+    if (to < from) to = from;
+    if (type === 'CYC') return { type: type, from: cycleSpan(cfg, from)[0], to: cycleSpan(cfg, to)[1] };
+    return { type: type, from: from, to: to };
+  }
 
   function indexRequests(cfg, requests, fromKey, toKey_, warnings) {
     const ids = {};
     cfg.agents.forEach(function (a) { ids[a.id.toUpperCase()] = a.id; });
-    const idx = { absent: new Map(), renfort: new Set(), cdt: new Set(), prefs: new Map(), fixed: new Map() };
+    const idx = { absent: new Map(), absType: new Map(), renfort: new Set(), cdt: new Set(), prefs: new Map(), fixed: new Map() };
     const unknown = new Set();
     (requests || []).forEach(function (r) {
       const id = ids[String(r.agent || '').trim().toUpperCase()];
       if (!id) { if (r.agent) unknown.add(r.agent); return; }
-      const type = normalizeType(r.type);
-      const from = normalizeDate(r.from), to = normalizeDate(r.to) || from;
-      if (!type || !from) return;
+      const sp = requestSpan(cfg, r);
+      if (!sp) return;
+      const type = sp.type, from = sp.from, to = sp.to;
       let k = from < fromKey ? fromKey : from;
       const end = to > toKey_ ? toKey_ : to;
       for (let n = 0; k <= end && n < 400; n++, k = addDays(k, 1)) {
         const key = id + '|' + k;
-        if (ABSENCE_TYPES.indexOf(type) >= 0) idx.absent.set(key, type);
+        if (ABSENCE_TYPES.indexOf(type) >= 0) { idx.absent.set(key, absenceLabel(type, r.value)); idx.absType.set(key, type); }
         else if (type === 'RENFORT') idx.renfort.add(key);
         else if (type === 'CDT') idx.cdt.add(key);
         else if (type === 'FIXE') idx.fixed.set(key, String(r.value || '').trim().toUpperCase());
@@ -339,14 +363,19 @@
     const pinned = {}; // date -> agents dont la vacation est imposée ou verrouillée (intouchables au lissage)
 
     function availability(k) {
-      const avail = [], absent = {};
+      const avail = [], absent = {}, absType = {};
       cfg.agents.forEach(function (a) {
         const key = a.id + '|' + k;
-        if (idx.absent.has(key)) { absent[a.id] = idx.absent.get(key); return; }
+        if (idx.absent.has(key)) {
+          // congé cycle : affiché seulement sur les jours officiellement travaillés (J1, J2, J3) ;
+          // le 6e jour (J0 en période d'option), l'agent n'est pas disponible mais rien n'est affiché
+          if (idx.absType.get(key) === 'CYC' && roles[k] !== 'J1' && roles[k] !== 'J2' && roles[k] !== 'J3') return;
+          absent[a.id] = idx.absent.get(key); absType[a.id] = idx.absType.get(key); return;
+        }
         if (renfortIds.has(a.id) && !idx.renfort.has(key)) return;
         avail.push(a.id);
       });
-      return { avail: avail, absent: absent };
+      return { avail: avail, absent: absent, absType: absType };
     }
     function applyAssign(day, id, kind, rank, rangeStr) {
       day.assign[id] = { slot: kind === 'J0' ? 'J0' : kind + '-' + rank, kind: kind, rank: rank, range: rangeStr };
@@ -456,13 +485,13 @@
     for (let k = from; k <= to; k = addDays(k, 1)) {
       const dt = dayType(k, hol);
       const role = roles[k] || 'OFF';
-      const day = { date: k, dayType: dt, role: role, period: periodOf(cfg, k), assign: {}, absent: {}, prefs: [], warnings: [], lockedAgents: {}, cdt: {} };
+      const day = { date: k, dayType: dt, role: role, period: periodOf(cfg, k), assign: {}, absent: {}, absentType: {}, prefs: [], warnings: [], lockedAgents: {}, cdt: {} };
       days.push(day);
       byDate[k] = day;
       if (role === 'OFF') continue;
 
       const av = availability(k), avail = av.avail;
-      day.absent = av.absent;
+      day.absent = av.absent; day.absentType = av.absType;
       Object.keys(av.absent).forEach(function (id) { counters[id].absDays += 1; });
       avail.forEach(function (id) {
         if (cdtOf(id, k)) day.cdt[id] = true;
@@ -759,6 +788,8 @@
 
   /* ---------- Mail de dépôt des demandes d'absence ---------- */
   const MAIL_TITLES = { C: 'Congés', REC: 'Récupérations', FORM: 'Formations', ABS: 'Autres absences' };
+  const MAIL_GROUP = { CF: 'C', CYC: 'C', RS: 'REC', RMT: 'REC', RPT: 'REC', REC: 'REC', FORM: 'FORM', ABS: 'ABS' };
+  const MAIL_SUB = { CF: 'CF', CYC: 'congé cycle', RS: 'RS', RMT: 'RMT', RPT: 'RPT' };
   function fmtFr(k) { return k.slice(8, 10) + '/' + k.slice(5, 7) + '/' + k.slice(0, 4); }
   // opts : types, from, to, onlyUnsent, greeting, signature, subject
   function buildLeaveMail(cfg, requests, opts) {
@@ -766,12 +797,15 @@
     const types = opts.types && opts.types.length ? opts.types : Object.keys(MAIL_TITLES);
     const items = [];
     (requests || []).forEach(function (r, i) {
-      const type = normalizeType(r.type), from = normalizeDate(r.from), to = normalizeDate(r.to) || from;
-      if (!type || !from || !MAIL_TITLES[type] || types.indexOf(type) < 0) return;
+      const sp = requestSpan(cfg, r);
+      if (!sp) return;
+      const group = MAIL_GROUP[sp.type];
+      if (!group || types.indexOf(group) < 0) return;
       if (opts.onlyUnsent && r.sent) return;
-      if (opts.from && to < opts.from) return;
-      if (opts.to && from > opts.to) return;
-      items.push({ i: i, type: type, agent: String(r.agent || '').trim(), from: from, to: to < from ? from : to, note: String(r.note || '').trim() });
+      if (opts.from && sp.to < opts.from) return;
+      if (opts.to && sp.from > opts.to) return;
+      const sub = sp.type === 'FORM' ? String(r.value || '').trim() : (MAIL_SUB[sp.type] || '');
+      items.push({ i: i, type: group, sub: sub, agent: String(r.agent || '').trim(), from: sp.from, to: sp.to, note: String(r.note || '').trim() });
     });
     if (!items.length) return { subject: '', body: '', included: [], count: 0 };
     items.sort(function (a, b) {
@@ -791,7 +825,7 @@
       let when;
       if (it.from === it.to) when = 'le ' + fmtFr(it.from) + (v ? (v.length ? ' (' + v[0] + ')' : ' (jour OFF)') : '');
       else when = 'du ' + fmtFr(it.from) + ' au ' + fmtFr(it.to) + ' (' + n + ' jours' + (v ? (v.length ? ', dont ' + v.length + ' vacation' + (v.length > 1 ? 's' : '') + ' de cycle' : ', aucune vacation de cycle') : '') + ')';
-      return '- ' + it.agent + ' : ' + when + (it.note ? ' — ' + it.note : '');
+      return '- ' + it.agent + (it.sub ? ' (' + it.sub + ')' : '') + ' : ' + when + (it.note ? ' — ' + it.note : '');
     };
     const present = [], parts = [];
     ['C', 'REC', 'FORM', 'ABS'].forEach(function (t) {
@@ -817,6 +851,7 @@
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
     buildRoles: buildRoles, slotMetrics: slotMetrics, computeCounters: computeCounters, generateMonth: generateMonth,
+    ABSENCE_TYPES: ABSENCE_TYPES, absenceLabel: absenceLabel, cycleSpan: cycleSpan, requestSpan: requestSpan,
     swapAgents: swapAgents, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };
 });

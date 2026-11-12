@@ -227,6 +227,42 @@ all.filter(d => d.role === 'J3').forEach(d => {
   console.log('impact d\'un échange : OK');
 }
 
+// ---- types d'absence : congé fractionné (CF), congé cycle (Cyc), récups RS / RMT / RPT, formation avec son code
+{
+  // cycle 2027-06-06 → 2027-06-11 (J1 J2 J3 OFF OFF J0, période d'option) ; congé cycle posé sur une seule date du cycle
+  const span = P.requestSpan(cfg, { type: 'Cyc', from: '2027-06-08', to: '2027-06-08' });
+  assert.deepStrictEqual([span.from, span.to], ['2027-06-06', '2027-06-11'], 'un congé cycle couvre les 6 jours du cycle');
+  const rq = [
+    { agent: 'A5', from: '2027-06-07', to: '2027-06-07', type: 'CYC' },
+    { agent: 'A2', from: '2027-06-07', to: '2027-06-07', type: 'FORM', value: 'GB' },
+    { agent: 'A3', from: '2027-06-06', to: '2027-06-06', type: 'RS' }, { agent: 'A6', from: '2027-06-07', to: '2027-06-07', type: 'RMT' },
+    { agent: 'A7', from: '2027-06-08', to: '2027-06-08', type: 'RPT' }, { agent: 'A1', from: '2027-06-01', to: '2027-06-01', type: 'C' }
+  ];
+  // A5 serait le seul candidat au J0 du 12/06 s'il était disponible : on rend les autres indisponibles ce jour-là
+  const others = ['A1', 'A2', 'A3', 'A4', 'A6', 'A7'].map(a => ({ agent: a, from: '2027-06-11', to: '2027-06-11', type: 'C' }));
+  const res = P.generateMonth(cfg, rq.concat(others), {}, '2027-06', null, []);
+  const day = k => res.days.find(d => d.date === k);
+  ['2027-06-06', '2027-06-07', '2027-06-08'].forEach(k => { assert.strictEqual(day(k).absent.A5, 'Cyc', 'Cyc affiché ' + k); assert(!day(k).assign.A5); });
+  ['2027-06-09', '2027-06-10'].forEach(k => assert(!day(k).absent.A5, 'Cyc non affiché sur un jour OFF ' + k));
+  const j0 = day('2027-06-11');
+  assert.strictEqual(j0.role, 'J0'); assert(!j0.assign.A5, 'pas de J0 le 6e jour d\'un congé cycle'); assert(!j0.absent.A5, 'Cyc non affiché le jour du J0');
+  assert(j0.warnings.some(w => /Aucun agent disponible pour le J0/.test(w)));
+  assert.strictEqual(day('2027-06-07').absent.A2, 'GB', 'la formation affiche son code');
+  assert.strictEqual(day('2027-06-07').absentType.A2, 'FORM');
+  assert.strictEqual(day('2027-06-06').absent.A3, 'RS'); assert.strictEqual(day('2027-06-07').absent.A6, 'RMT'); assert.strictEqual(day('2027-06-08').absent.A7, 'RPT');
+  assert.strictEqual(day('2027-06-01').absent.A1, 'CF', 'ancien type C = congé fractionné');
+  // compteurs : le 6e jour d'un congé cycle n'est pas compté comme jour d'absence
+  const cc = P.computeCounters(res.days, cfg, {});
+  assert.strictEqual(cc.A5.absDays, 3, 'congé cycle : 3 jours d\'absence (J1, J2, J3)');
+  // mail : sous-type indiqué, congé cycle étendu au cycle complet
+  const m = P.buildLeaveMail(cfg, rq, {});
+  assert(m.body.includes('- A5 (congé cycle) : du 06/06/2027 au 11/06/2027 (6 jours, dont 3 vacations de cycle)'), m.body);
+  assert(m.body.includes('- A2 (GB) : le 07/06/2027 (J2)'), m.body);
+  assert(m.body.includes('- A3 (RS) : le 06/06/2027 (J1)') && m.body.includes('- A6 (RMT)') && m.body.includes('- A7 (RPT)'), m.body);
+  assert(/RÉCUPÉRATIONS \(3\)/.test(m.body) && /CONGÉS \(2\)/.test(m.body), m.body);
+  console.log('types d\'absence : OK (Cyc sur J1-J3 seulement et pas de J0 le 6e jour, formation « GB », RS / RMT / RPT)');
+}
+
 // ---- mail de dépôt des demandes
 {
   const rq = [
@@ -239,7 +275,7 @@ all.filter(d => d.role === 'J3').forEach(d => {
   const m = P.buildLeaveMail(cfg, rq, { onlyUnsent: true });
   assert.strictEqual(m.count, 3); assert.deepStrictEqual(m.included, [0, 1, 3]);
   assert(/CONGÉS \(1\)/.test(m.body) && /RÉCUPÉRATIONS \(1\)/.test(m.body) && /FORMATIONS \(1\)/.test(m.body));
-  assert(m.body.includes('- A1 : du 12/01/2027 au 16/01/2027 (5 jours, dont 3 vacations de cycle) — vacances'), m.body);
+  assert(m.body.includes('- A1 (CF) : du 12/01/2027 au 16/01/2027 (5 jours, dont 3 vacations de cycle) — vacances'), m.body);
   assert(m.body.includes('- A2 : le 14/01/2027 (J2)'), m.body);
   assert(!m.body.includes('A5') && !m.body.includes('A3'), 'souhait et demande déjà déposée exclus');
   assert(m.subject.startsWith('Demandes de congés / récupérations / formations — du 12/01/2027 au 04/02/2027'), m.subject);
