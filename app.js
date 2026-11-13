@@ -155,7 +155,48 @@
         esc(staleReason(st[0]).charAt(0).toUpperCase() + staleReason(st[0]).slice(1)) + ' : l\'équité de ' + (st.length > 1 ? 'ces mois' : 'ce mois') + ' est faussée. Les journées figées et les échanges sont conservés.</span>' +
         '<button class="btn" data-act="regen-stale">Régénérer dans l\'ordre</button></div>';
     }
+    const pend = pendingMonths();
+    if (pend.length) {
+      h += '<div class="notice warnbox"><span>📝 <b>Demandes posées après coup</b> sur un planning déjà généré (' + pend.map(monthLabel).map(esc).join(', ') + '). ' +
+        'Seules les journées concernées seront recalculées ; le reste du planning ne change pas, même figé.</span>' +
+        '<button class="btn" data-act="update-days">Mettre à jour ces journées</button></div>';
+    }
+    (state.changeLog || []).forEach(function (c, i) {
+      h += '<div class="notice warnbox changes"><div><b>⚠ Vacations modifiées le ' + esc(fmtDayLong(c.date)) + ' (' + esc(c.role) + ')</b> suite à une demande posée après coup. Prévenez les agents concernés :' +
+        '<ul>' + c.items.map(function (it) { return '<li><b>' + esc(it.id) + '</b> : ' + esc(changeText(it.before)) + ' → <b>' + esc(changeText(it.after)) + '</b>' + (hoursMoved(it) ? ' <span class="deg">(horaires modifiés)</span>' : '') + '</li>'; }).join('') + '</ul></div>' +
+        '<button class="btn sec" data-act="ack-change" data-i="' + i + '">✓ Agents prévenus</button></div>';
+    });
     el.innerHTML = h; el.hidden = !h;
+  }
+  function pendingMonths() { return sortedMonths().filter(function (m) { return state.months[m].pending; }); }
+  function fmtDayLong(k) { return DOW_LONG[P.dow(k)] + ' ' + (+k.slice(8)) + ' ' + MONTHS_FR[+k.slice(5, 7) - 1].toLowerCase(); }
+  function changeText(s) {
+    if (!s) return 'pas de vacation';
+    if (s.absent) return 'absent (' + s.absent + ')';
+    return s.slot.replace(/-1$/, ' CDT') + ' ' + P.fmtRange(s.range) + (s.n1 ? ' + N1' : '') + (s.meal ? ' + repas' : '');
+  }
+  function hoursMoved(it) { return !!(it.before && it.after && it.before.range && it.after.range && it.before.range !== it.after.range); }
+  // Recalcule, dans l'ordre, les seules journées des mois générés que les demandes ne reflètent plus.
+  function updatePendingDays() {
+    const pend = pendingMonths(); if (!pend.length) return;
+    pushUndo('mise à jour des journées après une demande');
+    const log = [];
+    try {
+      pend.forEach(function (m) {
+        const mm = state.months[m];
+        const hist = daysBefore(m).filter(function (x) { return x.date >= P.addDays(P.monthRange(m)[0], -8); });
+        const r = P.updateDays(state.cfg, state.requests, countersBefore(m), m, mm.days, hist);
+        delete mm.pending;
+        if (!r.result) return;
+        mm.days = r.result.days; mm.warnings = r.result.warnings;
+        r.changes.forEach(function (c) { if (c.items.length) log.push(c); });
+        sortedMonths().forEach(function (x) { if (x > m && !state.months[x].pending) state.months[x].stale = 'une journée de ' + monthLabel(m).toLowerCase() + ' a été recalculée après une demande'; });
+      });
+      state.changeLog = (state.changeLog || []).concat(log);
+      state.genSinceBackup = true;
+      save(); render();
+      toast(log.length ? log.length + ' journée(s) recalculée(s) : vérifiez les changements de vacation à communiquer (encadré en haut).' : 'Aucune journée à modifier : le planning correspond déjà aux demandes.');
+    } catch (e) { save(); render(); toast('Erreur : ' + e.message); }
   }
   function exportBackup() {
     state.lastBackup = Date.now(); state.genSinceBackup = false;
@@ -397,7 +438,7 @@
       '<label>Agent A<select id="sw-a"></select></label><label>Agent B<select id="sw-b"></select></label>' +
       '<button class="btn" data-act="swap">Échanger</button><button class="btn sec" data-act="unlock">Déverrouiller A et B</button></div>' +
       '<div id="sw-suggest"></div>' +
-      '<p class="muted">L\'échange verrouille uniquement les vacations des deux agents ce jour-là (🔒) : elles sont conservées si vous régénérez le mois, le reste du jour est recalculé autour. La vacation complète change d\'agent (N1 🌙 et repas 🍽️ compris).</p></div>';
+      '<p class="muted">Un échange fige tout le mois ❄ : les plannings individuels déjà diffusés ne bougent plus, même si vous régénérez le mois. Une absence posée après coup ne recalcule que sa journée (bandeau « Demandes posées après coup »). Les vacations des deux agents sont en plus verrouillées 🔒 : si vous dégelez le mois, l\'échange est conservé et le reste est recalculé autour. La vacation complète change d\'agent (N1 🌙 et repas 🍽️ compris).</p></div>';
   }
   function fillSwap() {
     const mm = state.months[ui.month]; const sel = $('#sw-day'); if (!mm || !sel) return;
@@ -503,7 +544,11 @@
         toast('Vacations de ' + a + ' et ' + b + ' déverrouillées.');
       } else {
         if (a === b) { toast('Choisissez deux agents différents.'); return; }
-        P.swapAgents(d, a, b); toast('Échange effectué : ' + a + ' ↔ ' + b + '.');
+        P.swapAgents(d, a, b);
+        // Un échange fige tout le mois : une régénération ne touche plus aucun planning individuel
+        let nf = 0;
+        mm.days.forEach(function (x) { if (x.role !== 'OFF' && !x.frozen) { x.frozen = true; nf++; } });
+        toast('Échange effectué : ' + a + ' ↔ ' + b + '.' + (nf ? ' Le mois est figé ❄ : une régénération ne modifiera plus les plannings individuels. Une absence posée après coup ne recalculera que sa journée.' : ''));
       }
       sortedMonths().forEach(function (m) { if (m > ui.month) state.months[m].stale = 'un échange a été fait en ' + monthLabel(ui.month).toLowerCase(); });
       state.genSinceBackup = true;
@@ -612,13 +657,13 @@
     $$('#tab-requests tbody tr[data-i]').forEach(function (tr) {
       $$('[data-f]', tr).forEach(function (inp) {
         inp.onchange = function () {
-          const r = state.requests[+tr.dataset.i], m0 = reqMonth(r);
+          const r = state.requests[+tr.dataset.i], old = Object.assign({}, r);
           pushUndo('modification d\'une demande de ' + r.agent);
           r[inp.dataset.f] = inp.type === 'checkbox' ? (inp.checked ? P.toKey(new Date()) : '') : inp.value;
           if ((inp.dataset.f === 'from' || inp.dataset.f === 'to') && r[inp.dataset.f] && r[inp.dataset.f] < FIRST_DAY) { r[inp.dataset.f] = FIRST_DAY; toast('Le planning commence le 1er janvier 2027 : date ramenée au 01/01/2027.'); }
           if (inp.dataset.f === 'from' && !r.to) { r.to = r.from; }
           if (REQ_NEUTRAL.indexOf(inp.dataset.f) < 0) {
-            requestChanged([m0, reqMonth(r)]);
+            requestChanged([old, r]);
             const bad = requestChecks()[+tr.dataset.i];
             if (bad && bad.length) toast('⚠ ' + r.agent + ' absent : ' + fmtDay(bad[0].date) + ' (' + bad[0].role + ') ' + bad[0].problems.join(', ') + (bad.length > 1 ? ' — et ' + (bad.length - 1) + ' autre(s) jour(s).' : '.'));
           }
@@ -665,8 +710,19 @@
   }
   const REQ_NEUTRAL = ['note', 'sent']; // champs sans effet sur le planning
   function reqMonth(r) { const d = P.normalizeDate(r.from); return d ? d.slice(0, 7) : null; }
-  function requestChanged(months) { // months : mois de début des demandes avant / après modification
-    const ms = months.filter(Boolean).sort(); if (!ms.length) return;
+  const DAY_TYPES = ABS_TYPES.concat(['RENFORT']); // demandes qui ne changent que la présence d'un agent
+  function requestChanged(reqs) { // reqs : demandes concernées, avant et après modification
+    reqs = reqs.filter(Boolean);
+    const spans = reqs.map(function (r) { return P.requestSpan(state.cfg, r); });
+    if (spans.length && spans.every(function (s) { return !s || DAY_TYPES.indexOf(s.type) >= 0; })) {
+      // absence ou renfort posé après coup : seules les journées concernées seront recalculées
+      spans.forEach(function (s) {
+        if (!s) return;
+        sortedMonths().forEach(function (m) { const rg = P.monthRange(m); if (s.from <= rg[1] && s.to >= rg[0]) state.months[m].pending = true; });
+      });
+      return;
+    }
+    const ms = reqs.map(reqMonth).filter(Boolean).sort(); if (!ms.length) return;
     // on part du mois de début de la demande : elle peut déborder sur les mois suivants
     markStale(ms[0], 'une demande a été modifiée en ' + monthLabel(ms[0]).toLowerCase());
   }
@@ -790,7 +846,7 @@
           else if (r.type === 'RENFORT') { state.cfg.agents.push({ id: r.agent.toUpperCase(), renfort: true, reg: nextReg() }); known[r.agent.toUpperCase()] = r.agent.toUpperCase(); r.agent = r.agent.toUpperCase(); }
           r.ts = bts; state.requests.push(r); added++;
         });
-        requestChanged(res.out.map(reqMonth));
+        requestChanged(res.out);
         save(); renderRequests();
         toast(added + ' demande(s) importée(s)' + (res.rejected.length ? ' · ignorées : ' + res.rejected.join(', ') : '') + (unknown.size ? ' · agent(s) inconnu(s) à corriger : ' + Array.from(unknown).join(', ') : '') + '.');
       } catch (err) { toast('Import impossible : ' + err.message); }
@@ -986,9 +1042,11 @@
       case 'print-pdf': printPlanning(); break;
       case 'swap': doSwap(false); break;
       case 'unlock': doSwap(true); break;
-      case 'req-add': pushUndo('ajout d\'une demande'); state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'CF', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([ui.month]); save(); renderRequests(); break;
-      case 'req-del': pushUndo('suppression d\'une demande de ' + (state.requests[+t.dataset.i] || {}).agent); requestChanged([reqMonth(state.requests[+t.dataset.i])]); state.requests.splice(+t.dataset.i, 1); save(); renderRequests(); break;
-      case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { pushUndo('suppression de toutes les demandes'); requestChanged(state.requests.map(reqMonth)); state.requests = []; save(); renderRequests(); } break;
+      case 'req-add': pushUndo('ajout d\'une demande'); state.requests.push({ agent: ids()[0] || '', from: ui.month + '-01', to: ui.month + '-01', type: 'CF', value: '', note: '', ts: nextTs(), sent: '' }); requestChanged([state.requests[state.requests.length - 1]]); save(); renderRequests(); break;
+      case 'req-del': pushUndo('suppression d\'une demande de ' + (state.requests[+t.dataset.i] || {}).agent); requestChanged([state.requests[+t.dataset.i]]); state.requests.splice(+t.dataset.i, 1); save(); renderRequests(); break;
+      case 'req-clear': if (confirm('Supprimer toutes les demandes ?')) { pushUndo('suppression de toutes les demandes'); requestChanged(state.requests.slice()); state.requests = []; save(); renderRequests(); } break;
+      case 'update-days': updatePendingDays(); break;
+      case 'ack-change': state.changeLog.splice(+t.dataset.i, 1); save(); renderNotice(); break;
       case 'regen-stale': regenStale(); break;
       case 'undo': undo(); break;
       case 'ack-anchor': state.ackAnchor = state.cfg.cycle.anchor; save(); keepScroll(renderPlanning); toast('Alerte sur la date d\'ancrage masquée.'); break;

@@ -136,6 +136,38 @@ all.filter(d => d.role === 'J3').forEach(d => {
   console.log('figées :', frozenDates.length, 'journées conservées à l\'identique ; reste recalculé (', free.length, 'journées )');
 }
 
+// ---- demande posée après coup : seules les journées concernées sont recalculées (mois figé ou non)
+{
+  const month = '2027-03', base = bases[month], h = hist(all.filter(z => z.date < month + '-01'), month);
+  const sig = d => JSON.stringify(Object.keys(d.assign).sort().map(i => [i, d.assign[i].slot, d.assign[i].range, !!d.assign[i].n1, !!d.assign[i].meal]));
+  [true, false].forEach(frozen => {
+    const days = JSON.parse(JSON.stringify(all.filter(d => d.date.startsWith(month))));
+    days.forEach(d => { if (d.role !== 'OFF') d.frozen = frozen; else delete d.frozen; });
+    // rien n'a changé : aucune journée à recalculer
+    assert.strictEqual(P.updateDays(cfg, requests, base, month, days, h).result, null);
+    // congé posé après coup sur un J1 où l'agent travaille
+    const d = days.find(x => x.role === 'J1' && x.assign.A3 && Object.keys(x.assign).length >= 5);
+    const r = P.updateDays(cfg, requests.concat([{ agent: 'A3', from: d.date, to: d.date, type: 'CF' }]), base, month, days, h);
+    assert.deepStrictEqual(r.dates, [d.date]);
+    r.result.days.forEach(nd => {
+      const od = days.find(x => x.date === nd.date);
+      assert.strictEqual(!!nd.frozen, !!od.frozen, 'état figé ' + nd.date);
+      if (nd.date !== d.date) assert.strictEqual(sig(nd), sig(od), 'journée non concernée modifiée ' + nd.date);
+    });
+    const nd = r.result.days.find(x => x.date === d.date);
+    assert(!nd.assign.A3 && nd.absent.A3 === 'CF');
+    assert.strictEqual(Object.keys(nd.assign).length, Object.keys(d.assign).length - 1);
+    const ch = r.changes[0];
+    assert(ch.items.some(it => it.id === 'A3' && it.before.slot && it.after.absent === 'CF'));
+    ch.items.forEach(it => { if (it.id !== 'A3') assert(it.before && it.after && it.after.slot, 'changement listé ' + it.id); });
+    // congé retiré après coup : l'agent retrouve une vacation ce jour-là seulement
+    const back = P.updateDays(cfg, requests, base, month, r.result.days.map(x => Object.assign({}, x, { frozen: frozen && x.role !== 'OFF' })), h);
+    assert.deepStrictEqual(back.dates, [d.date]);
+    assert(back.result.days.find(x => x.date === d.date).assign.A3);
+  });
+  console.log('demande après coup : OK (seule la journée posée est recalculée, changements de vacation listés)');
+}
+
 // ---- rattrapage après absence : une agente absente tout janvier revient à parité sur les nuits
 {
   const ids = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7'];
@@ -307,6 +339,28 @@ all.filter(d => d.role === 'J3').forEach(d => {
   assert(m.body.includes('- A3 (RS) : le 06/06/2027 (J1)') && m.body.includes('- A6 (RMT)') && m.body.includes('- A7 (RPT)'), m.body);
   assert(/RÉCUPÉRATIONS \(3\)/.test(m.body) && /CONGÉS \(2\)/.test(m.body), m.body);
   console.log('types d\'absence : OK (Cyc sur J1-J3 seulement et pas de J0 le 6e jour, formation « GB », RS / RMT / RPT)');
+}
+
+// ---- priorités d'équilibre : N1, nuits et repas passent avant le reste (équipe de 6 dont 3 CDT, une année)
+{
+  const ids6 = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6'];
+  const c6 = { ...cfg, agents: ids6.map((id, i) => ({ id, renfort: false, cdt: i < 3 })), cycle: { ...cfg.cycle, optionPeriods: P.DEFAULT_OPTION_PERIODS }, maxNightsMonth: 3, maxN1Month: 2 };
+  let sd = 31; const rn = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+  const rq6 = [];
+  for (let i = 0; i < 30; i++) { const d = P.addDays('2027-01-01', Math.floor(rn() * 360)); rq6.push({ agent: ids6[Math.floor(rn() * 6)], from: d, to: P.addDays(d, Math.floor(rn() * 6)), type: 'CF' }); }
+  let d6 = []; const worst = { nights: 0, n1: 0, meal: 0 };
+  for (let m = 1; m <= 12; m++) {
+    const month = '2027-' + String(m).padStart(2, '0');
+    d6 = d6.concat(P.generateMonth(c6, rq6, P.computeCounters(d6, c6, {}), month, null, hist(d6, month)).days);
+    const cc = P.computeCounters(d6, c6, {});
+    Object.keys(worst).forEach(k => {
+      const rate = ids6.reduce((s, i) => s + cc[i][k], 0) / ids6.reduce((s, i) => s + P.effDays(cc[i], c6, k), 0);
+      const dv = ids6.map(i => cc[i][k] - rate * P.effDays(cc[i], c6, k));
+      worst[k] = Math.max(worst[k], Math.max(...dv) - Math.min(...dv));
+    });
+  }
+  console.log('priorités : pire écart mensuel sur l\'année (rapporté aux jours travaillés) — nuits', worst.nights.toFixed(2), '| N1', worst.n1.toFixed(2), '| repas', worst.meal.toFixed(2));
+  Object.keys(worst).forEach(k => assert(worst[k] < 2, 'écart de ' + k + ' trop grand : ' + worst[k].toFixed(2)));
 }
 
 // ---- mail de dépôt des demandes

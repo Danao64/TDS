@@ -380,6 +380,12 @@
 
   /* ---------- Génération d'un mois ---------- */
   const DEFAULT_WEIGHTS = { hours: 0.125, night: 8, evening: 1, late: 3, early: 2, nightWE: 2, n1: 8, meal: 2, j2tot: 25, pref: 40, n1Extra: 40 };
+  // Priorités d'équilibre (décision de Damien, 13/11/2026) : N1, nuits et repas passent avant tout le reste.
+  // Poids utilisés par le lissage du mois à la place des pondérations ordinaires pour ces trois compteurs
+  // (environ 100 fois plus lourds) : un échange qui les déséquilibre n'est jamais accepté pour gagner sur
+  // les heures, les soirées ou les J2 tardifs. Mesuré sur 20 années simulées : mois avec un écart de 2 nuits
+  // entre deux agents 10-12 % → 1-3 %, de 2 N1 10-14 % → 6-9 %, de 2 repas 10-20 % → 5-12 %.
+  const DEFAULT_PRIORITY = { nights: 800, n1: 1600, meal: 800 };
   // Rythme de rattrapage : l'équité se fait sur l'année, pas en un mois. Au plus maxNightsMonth nuits par agent et par mois,
   // une N1 par mois (une 2e seulement exceptionnellement, coût n1Extra), jamais plus de maxN1Month.
   const CAP_PENALTY = 1e4;
@@ -567,9 +573,9 @@
             applyAssign(day, id, a.kind, a.rank, a.range);
             if (a.n1) flag(day, id, 'n1');
             if (a.meal) flag(day, id, 'meal');
-            if (avail.indexOf(id) < 0) day.warnings.push('Journée figée : ' + id + ' est indisponible d\'après les demandes (vacation conservée).');
+            if (avail.indexOf(id) < 0) { day.drift = true; day.warnings.push('Journée figée : ' + id + ' est indisponible d\'après les demandes (vacation conservée).'); }
           });
-          if (role !== 'J0') avail.forEach(function (id) { if (!day.assign[id]) day.warnings.push('Journée figée : ' + id + ' est disponible mais n\'a pas de vacation.'); });
+          if (role !== 'J0') avail.forEach(function (id) { if (!day.assign[id]) { day.drift = true; day.warnings.push('Journée figée : ' + id + ' est disponible mais n\'a pas de vacation.'); } });
           if (prevF.nextNight) day.nextNight = prevF.nextNight.slice();
           if (prevF.lockedAgents) day.lockedAgents = Object.assign({}, prevF.lockedAgents);
           continue;
@@ -659,7 +665,7 @@
      * journées figées, vacations verrouillées ou imposées, au rang 1 chef de tour, ni au J0 après N1. */
     (function refine() {
       const KEYS = [['hours', 'hours'], ['nights', 'night'], ['evenings', 'evening'], ['late', 'late'], ['early', 'early'], ['nightWE', 'nightWE'], ['n1', 'n1'], ['meal', 'meal']];
-      const rt = {};
+      const rt = {}, PRIO = Object.assign({}, DEFAULT_PRIORITY, cfg.priority || {});
       KEYS.forEach(function (kw) {
         let s = 0, d = 0;
         regular.forEach(function (id) { s += counters[id][kw[0]]; d += effDays(counters[id], cfg, kw[0]); });
@@ -668,7 +674,7 @@
       const load = function (id) { // écart global d'un agent
         const c = counters[id];
         let f = 0;
-        KEYS.forEach(function (kw) { const d = c[kw[0]] - rt[kw[0]] * effDays(c, cfg, kw[0]); f += W[kw[1]] / 2 * d * d; });
+        KEYS.forEach(function (kw) { const d = c[kw[0]] - rt[kw[0]] * effDays(c, cfg, kw[0]); f += (PRIO[kw[0]] !== undefined ? PRIO[kw[0]] : W[kw[1]]) / 2 * d * d; });
         if (!renfortIds.has(id)) {
           f += Math.max(0, monthN[id] - CAP.nights) * CAP_PENALTY;
           for (let x = 1; x < monthN1[id]; x++) f += n1Cost(id, x);   // 2e N1 : exceptionnelle ; au-delà du plafond : interdite
@@ -804,6 +810,46 @@
     return out;
   }
 
+  /* ---------- Demandes posées après coup : recalcul des seules journées concernées ----------
+   * days : planning actuel du mois. Les journées où les demandes ne correspondent plus au planning
+   * (agent planifié devenu absent, agent redevenu disponible sans vacation, J0 tenu par un agent indisponible)
+   * sont recalculées ; toutes les autres sont conservées à l'identique, figées ou non.
+   * Renvoie { dates, changes, result } : result = nouveau mois (null si rien à faire),
+   * changes = [{ date, role, items: [{ id, before, after }] }] avec before / after = vacation ({slot, range, n1, meal}),
+   * { absent: libellé } ou null. */
+  function updateDays(cfg, requests, base, month, days, history) {
+    const keep = function (o) { const p = {}; days.forEach(function (d) { p[d.date] = Object.assign({}, d, { frozen: o(d) }); }); return p; };
+    const sim = generateMonth(cfg, requests, base, month, keep(function () { return true; }), history);
+    const dates = sim.days.filter(function (d) { return d.drift; }).map(function (d) { return d.date; });
+    if (!dates.length) return { dates: [], changes: [], result: null };
+    const todo = new Set(dates), orig = {};
+    days.forEach(function (d) { orig[d.date] = d; });
+    const res = generateMonth(cfg, requests, base, month, keep(function (d) { return !todo.has(d.date); }), history);
+    res.days.forEach(function (d) { // l'état figé de chaque journée reste celui d'avant
+      const o = orig[d.date];
+      if (o && o.frozen) d.frozen = true; else delete d.frozen;
+      delete d.drift;
+    });
+    const state = function (d, id) {
+      if (d.assign[id]) { const a = d.assign[id]; return { slot: a.slot, range: a.range, n1: !!a.n1, meal: !!a.meal }; }
+      if (d.absent && d.absent[id]) return { absent: d.absent[id] };
+      return null;
+    };
+    const same = function (x, y) { return JSON.stringify(x) === JSON.stringify(y); };
+    const changes = [];
+    res.days.forEach(function (d) {
+      if (!todo.has(d.date)) return;
+      const o = orig[d.date] || { assign: {}, absent: {} }, items = [];
+      const ids = Object.keys(Object.assign({}, o.assign, o.absent, d.assign, d.absent));
+      ids.forEach(function (id) {
+        const b = state(o, id), a = state(d, id);
+        if (!same(b, a)) items.push({ id: id, before: b, after: a });
+      });
+      changes.push({ date: d.date, role: d.role, items: items });
+    });
+    return { dates: dates, changes: changes, result: res };
+  }
+
   /* ---------- Contrôle chef de tour (rang 1) ---------- */
   function checkCdt(day) {
     day.warnings = (day.warnings || []).filter(function (w) { return w.indexOf('CDT : ') !== 0; });
@@ -910,7 +956,7 @@
 
   return {
     buildLeaveMail: buildLeaveMail,
-    DEFAULT_TABLES: DEFAULT_TABLES, DEFAULT_TABLES_CREUSE: DEFAULT_TABLES_CREUSE, tablesFor: tablesFor, periodOf: periodOf, j0RangeFor: j0RangeFor, DEFAULT_WEIGHTS: DEFAULT_WEIGHTS, DAY_TYPE_LABEL: DAY_TYPE_LABEL,
+    DEFAULT_TABLES: DEFAULT_TABLES, DEFAULT_TABLES_CREUSE: DEFAULT_TABLES_CREUSE, tablesFor: tablesFor, periodOf: periodOf, j0RangeFor: j0RangeFor, DEFAULT_WEIGHTS: DEFAULT_WEIGHTS, DEFAULT_PRIORITY: DEFAULT_PRIORITY, DAY_TYPE_LABEL: DAY_TYPE_LABEL,
     parseRange: parseRange, fmtRange: fmtRange, parseKey: parseKey, toKey: toKey, addDays: addDays, dow: dow,
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
@@ -918,6 +964,6 @@
     DEFAULT_OPTION_PERIODS: DEFAULT_OPTION_PERIODS, DEFAULT_QUOTAS: DEFAULT_QUOTAS, DEFAULT_BC: DEFAULT_BC, DEFAULT_QUOTA_TYPES: DEFAULT_QUOTA_TYPES,
     quotaFor: quotaFor, bcFor: bcFor, quotaCheck: quotaCheck, cardinalOf: cardinalOf,
     ABSENCE_TYPES: ABSENCE_TYPES, absenceLabel: absenceLabel, cycleSpan: cycleSpan, requestSpan: requestSpan,
-    swapAgents: swapAgents, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
+    swapAgents: swapAgents, updateDays: updateDays, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };
 });
