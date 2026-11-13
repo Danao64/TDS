@@ -194,6 +194,17 @@ all.filter(d => d.role === 'J3').forEach(d => {
   console.log('grilles : ' + creuse + ' jours en période creuse, ' + option + ' en période d\'option, horaires conformes');
 }
 
+// ---- saisonnalité 2027 (note de service) : périodes d'option par défaut
+{
+  const c27 = { ...cfg, cycle: { ...cfg.cycle, optionPeriods: P.DEFAULT_OPTION_PERIODS } };
+  [['2027-01-12', 'creuse'], ['2027-01-13', 'option'], ['2027-07-23', 'option'], ['2027-07-24', 'creuse'], ['2027-08-31', 'creuse'],
+   ['2027-09-01', 'option'], ['2027-12-17', 'option'], ['2027-12-18', 'creuse']].forEach(([k, p]) => assert.strictEqual(P.periodOf(c27, k), p, k));
+  // les périodes d'option font 16 et 9 cycles de 12 jours
+  assert.strictEqual(P.daysBetween('2027-01-13', '2027-07-23') + 1, 16 * 12);
+  assert.strictEqual(P.daysBetween('2027-09-01', '2027-12-17') + 1, 9 * 12);
+  console.log('saisonnalité 2027 : OK');
+}
+
 // ---- contrôle d'effectif des demandes (avant génération)
 {
   const rq = [

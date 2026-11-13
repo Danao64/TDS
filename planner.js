@@ -7,7 +7,14 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  /* ---------- Tableaux horaires (note de service TDS LFBO, vacations élémentaires J1-1 … J3-10) ----------
+  /* ---------- Saisonnalité 2027 (note de service TDS LFBO 2027, § 1.2) ----------
+   * Périodes « normales, avec TDS Option 1 » = périodes d'option (J0 / JE) ; le reste de l'année est en période creuse. */
+  const DEFAULT_OPTION_PERIODS = [
+    { from: '2027-01-13', to: '2027-07-23' },
+    { from: '2027-09-01', to: '2027-12-17' }
+  ];
+
+  /* ---------- Tableaux horaires (note de service TDS LFBO 2027, vacations élémentaires J1-1 … J3-10) ----------
    * Période d'option (avec J0 / JE), pages 3 à 5 : grille « NORMALE AVEC TDS OPTION 1 ». */
   const DEFAULT_TABLES = {
     weekday: {
@@ -55,7 +62,7 @@
   }
   function periodOf(cfg, k) { return inPeriods(k, cfg.cycle && cfg.cycle.optionPeriods) ? 'option' : 'creuse'; }
 
-  /* ---------- Quotas d'absences et besoin de couverture (note de service TDS LFBO, page 9) ----------
+  /* ---------- Quotas d'absences et besoin de couverture (note de service TDS LFBO 2027, page 9) ----------
    * « Période normale » de la note = période d'option ; sinon période creuse.
    * Alpha : nombre d'absences accordables par vacation selon le cardinal d'équipe (nombre d'agents hors renforts).
    * Bêta : périodes de bureau ; les récups RS peuvent être prises sur bêta s'il n'est pas consommé (sauf cardinal 6).
@@ -908,7 +915,7 @@
     daysBetween: daysBetween, monthRange: monthRange, normalizeDate: normalizeDate, normalizeType: normalizeType,
     normValue: normValue, frenchHolidays: frenchHolidays, holidaySet: holidaySet, dayType: dayType,
     buildRoles: buildRoles, slotMetrics: slotMetrics, computeCounters: computeCounters, generateMonth: generateMonth,
-    DEFAULT_QUOTAS: DEFAULT_QUOTAS, DEFAULT_BC: DEFAULT_BC, DEFAULT_QUOTA_TYPES: DEFAULT_QUOTA_TYPES,
+    DEFAULT_OPTION_PERIODS: DEFAULT_OPTION_PERIODS, DEFAULT_QUOTAS: DEFAULT_QUOTAS, DEFAULT_BC: DEFAULT_BC, DEFAULT_QUOTA_TYPES: DEFAULT_QUOTA_TYPES,
     quotaFor: quotaFor, bcFor: bcFor, quotaCheck: quotaCheck, cardinalOf: cardinalOf,
     ABSENCE_TYPES: ABSENCE_TYPES, absenceLabel: absenceLabel, cycleSpan: cycleSpan, requestSpan: requestSpan,
     swapAgents: swapAgents, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO

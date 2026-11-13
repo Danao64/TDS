@@ -21,7 +21,7 @@
         cycle: {
           anchor: '2027-01-01',
           normal: ['J1', 'J2', 'J3', 'OFF', 'OFF', 'OFF'],
-          optionPeriods: []
+          optionPeriods: JSON.parse(JSON.stringify(P.DEFAULT_OPTION_PERIODS))
         },
         holidays: [], minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j0RangeSunday: '10:00-18:00', j2EarlyMax: '10:00', absenceCredit: 1,
         weights: Object.assign({}, P.DEFAULT_WEIGHTS)
@@ -44,6 +44,12 @@
     state.weightsVersion = 2;
   }
   state.requests.forEach(function (r) { if (r.type === 'C') r.type = 'CF'; }); // ancien « Congé » = congé fractionné
+  let ndsUpdated = false;
+  if (state.ndsVersion !== 2027) { // saisonnalité de la note de service TDS LFBO 2027
+    const cur = JSON.stringify(state.cfg.cycle.optionPeriods || []), nxt = JSON.stringify(P.DEFAULT_OPTION_PERIODS);
+    if (cur !== nxt) { ndsUpdated = cur; state.cfg.cycle.optionPeriods = JSON.parse(nxt); }
+    state.ndsVersion = 2027;
+  }
   if (!state.cfg.j0RangeSunday) state.cfg.j0RangeSunday = '10:00-18:00'; // J0 du dimanche / férié (note de service)
   if (!state.cfg.tablesCreuse) state.cfg.tablesCreuse = JSON.parse(JSON.stringify(P.DEFAULT_TABLES_CREUSE)); // grilles de période creuse (ajout)
   delete state.cfg.equityPeriod; // ancien réglage « remise à zéro annuelle », retiré : les compteurs sont toujours cumulés
@@ -842,15 +848,15 @@
       '<p class="muted">Les compteurs ne sont jamais remis à zéro au 1er janvier : un retard de fin d\'année (congés en novembre-décembre) se rattrape au début de l\'année suivante, au même rythme plafonné.</p></div>';
     const qTypes = c.quotaTypes || P.DEFAULT_QUOTA_TYPES;
     h += '<div class="card"><h2 style="margin-top:0">Quotas d\'absences et besoin de couverture</h2>' +
-      '<p class="muted">Note de service TDS LFBO, page 9. « Période normale » = période d\'option ; sinon période creuse. Cardinal d\'équipe actuel : <b>' + P.cardinalOf(c) + '</b> agent(s) hors renforts' + ([6, 7, 8].indexOf(P.cardinalOf(c)) < 0 ? ' <span class="warn">(non prévu par la note : pas de contrôle de quota)</span>' : '') + '. Alpha = absences accordables par vacation ; une récup RS peut passer sur bêta s\'il n\'est pas consommé (sauf cardinal 6). BC = besoin de couverture : en dessous, l\'effectif de la vacation est dégradé.</p>' +
+      '<p class="muted">Note de service TDS LFBO 2027, page 9. « Période normale » = période d\'option ; sinon période creuse. Cardinal d\'équipe actuel : <b>' + P.cardinalOf(c) + '</b> agent(s) hors renforts' + ([6, 7, 8].indexOf(P.cardinalOf(c)) < 0 ? ' <span class="warn">(non prévu par la note : pas de contrôle de quota)</span>' : '') + '. Alpha = absences accordables par vacation ; une récup RS peut passer sur bêta s\'il n\'est pas consommé (sauf cardinal 6). BC = besoin de couverture : en dessous, l\'effectif de la vacation est dégradé.</p>' +
       '<div class="row">Types décomptés sur le quota : ' + P.ABSENCE_TYPES.map(function (t) {
         return '<label style="flex-direction:row;align-items:center;gap:4px;color:var(--ink)"><input type="checkbox" data-qt="' + t + '"' + (qTypes.indexOf(t) >= 0 ? ' checked' : '') + '>' + esc(TYPES[t] ? TYPES[t].replace(/ \(valeur.*\)$/, '') : t) + '</label>';
       }).join('') + '</div>' +
       '<label style="margin-top:10px">Quotas (alpha / bêta par période, cardinal et type de jour) et BC (JSON)<textarea id="p-quotas" rows="10">' + esc(JSON.stringify({ quotas: c.quotas || P.DEFAULT_QUOTAS, bc: c.bc || P.DEFAULT_BC }, null, 1)) + '</textarea></label></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période creuse (JSON)</h2><textarea id="p-tables-creuse" rows="12">' + esc(JSON.stringify(c.tablesCreuse || P.DEFAULT_TABLES_CREUSE, null, 1)) + '</textarea>' +
-      '<p class="muted">Utilisés hors période d\'option (cycle J1 J2 J3 Repos Repos Repos). Valeurs par défaut : note de service TDS LFBO, « TDS socle hors option 1 », pages 6 à 8.</p></div>';
+      '<p class="muted">Utilisés hors période d\'option (cycle J1 J2 J3 Repos Repos Repos). Valeurs par défaut : note de service TDS LFBO 2027, « TDS socle hors option 1 », pages 6 à 8.</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Tableaux horaires — période d\'option (JSON)</h2><textarea id="p-tables" rows="12">' + esc(JSON.stringify(c.tables, null, 1)) + '</textarea>' +
-      '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Utilisés pendant la période d\'option (avec J0). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 », note de service TDS LFBO, pages 3 à 5.</p></div>';
+      '<p class="muted">Par type de jour (weekday, saturday, sunday) et par vacation (J1, J2, J3), la liste des horaires attribués dans l\'ordre du rang (rang 1 = J1-1, etc.). Utilisés pendant la période d\'option (avec J0). Valeurs par défaut : grille « NORMALE AVEC TDS OPTION 1 », note de service TDS LFBO 2027, pages 3 à 5.</p></div>';
     h += '<button class="btn" data-act="params-save">Enregistrer les paramètres</button>';
     $('#tab-params').innerHTML = h;
   }
@@ -1029,5 +1035,13 @@
   if (dropped) { save(); ui.month = startMonth(); }
   render();
   if (dropped) toast(dropped + ' mois antérieur(s) à janvier 2027 retiré(s) : le planning commence en janvier 2027 (↶ Annuler pour les récupérer).');
+  if (ndsUpdated !== false) {
+    // permet ↶ Annuler : on empile l'état avant la mise à jour
+    const before = JSON.parse(JSON.stringify(state)); before.cfg.cycle.optionPeriods = JSON.parse(ndsUpdated); // ndsVersion conservé : annuler garde les anciennes dates
+    undoStack.push({ label: 'mise à jour des périodes d\'option 2027', data: JSON.stringify(before) }); paintUndo();
+    if (sortedMonths().length) markStale(sortedMonths()[0], 'les périodes d\'option ont été mises à jour');
+    save(); render();
+    toast('Périodes d\'option 2027 de la note de service enregistrées : du 13/01 au 23/07 et du 01/09 au 17/12 (le reste de l\'année en période creuse). ↶ Annuler pour revenir aux anciennes.');
+  }
   if (migrated) { save(); toast('Pondération « Nuit » passée de 4 à 8 (nouveau réglage par défaut, rattrapage des nuits sur l\'année). Modifiable dans Paramètres.'); }
 })();
