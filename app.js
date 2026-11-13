@@ -168,12 +168,12 @@
   function showTab(t) {
     ui.tab = t;
     $$('#tabs button').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === t); });
-    ['planning', 'stats', 'requests', 'params', 'data'].forEach(function (n) { $('#tab-' + n).hidden = n !== t; });
+    ['planning', 'agent', 'stats', 'requests', 'params', 'data'].forEach(function (n) { $('#tab-' + n).hidden = n !== t; });
     render();
   }
   function render() {
     renderNotice();
-    ({ planning: renderPlanning, stats: renderStats, requests: renderRequests, params: renderParams, data: renderData })[ui.tab]();
+    ({ planning: renderPlanning, agent: renderAgent, stats: renderStats, requests: renderRequests, params: renderParams, data: renderData })[ui.tab]();
   }
 
   /* =====================================================================
@@ -192,13 +192,15 @@
       return '<option value="' + m + '"' + (m === ui.month ? ' selected' : '') + '>' + monthLabel(m) + tag + '</option>';
     }).join('');
   }
+  function monthNavHtml(id) { // choix du mois, partagé par Planning équipe et Planning individuel
+    return '<div class="month-nav"><button class="btn sec" data-act="month-prev" title="Mois précédent"' + (ui.month <= FIRST_MONTH ? ' disabled' : '') + '>◀</button>' +
+      '<label>Mois<select id="' + id + '">' + monthOptions() + '</select></label>' +
+      '<button class="btn sec" data-act="month-next" title="Mois suivant">▶</button></div>';
+  }
   function renderPlanning() {
     const el = $('#tab-planning');
     const mm = state.months[ui.month];
-    let html = '<div class="card"><div class="row">' +
-      '<div class="month-nav"><button class="btn sec" data-act="month-prev" title="Mois précédent"' + (ui.month <= FIRST_MONTH ? ' disabled' : '') + '>◀</button>' +
-      '<label>Mois<select id="pl-month">' + monthOptions() + '</select></label>' +
-      '<button class="btn sec" data-act="month-next" title="Mois suivant">▶</button></div>' +
+    let html = '<div class="card"><div class="row">' + monthNavHtml('pl-month') +
       '<button class="btn" data-act="generate">' + (mm ? 'Régénérer le mois' : 'Générer le mois') + '</button>';
     if (mm) {
       html += '<button class="btn sec" data-act="export-csv">Export CSV</button><button class="btn sec" data-act="export-xlsx">Export Excel</button><button class="btn sec" data-act="print-pdf">📄 Exporter en PDF</button><button class="btn sec danger" data-act="clear-month">🗑 Effacer ce mois</button>';
@@ -217,7 +219,6 @@
       return '<li>' + esc(w) + (isAnchorWarn(w) ? ' <button class="btn sec ack" data-act="ack-anchor" title="Ne plus afficher cette alerte (elle reviendra si la date d\'ancrage change)">✓ Compris</button>' : '') + '</li>';
     }).join('') + '</ul></div>';
     html += freezeHtml(mm) + gridHtml(mm);
-    html += agentSheetHtml(mm);
     html += swapHtml(mm);
     el.innerHTML = html;
     bindPlanning();
@@ -283,7 +284,7 @@
     });
     h += '</tr></thead><tbody>';
     visibleAgents(mm).forEach(function (a) {
-      h += '<tr><td class="sticky">' + esc(a.id) + (a.cdt ? ' <small class="muted">CDT</small>' : '') + (a.renfort ? ' <small class="muted">renf.</small>' : '') + '</td>';
+      h += '<tr><td class="sticky"><a href="#" class="ag-link" data-act="open-agent" data-id="' + esc(a.id) + '" title="Voir le planning individuel de ' + esc(a.id) + '">' + esc(a.id) + '</a>' + (a.cdt ? ' <small class="muted">CDT</small>' : '') + (a.renfort ? ' <small class="muted">renf.</small>' : '') + '</td>';
       mm.days.forEach(function (d) {
         const as = d.assign[a.id];
         if (as) {
@@ -315,18 +316,30 @@
     });
     return out;
   }
+  function renderAgent() {
+    const el = $('#tab-agent');
+    const mm = state.months[ui.month];
+    const list = mm ? visibleAgents(mm) : [];
+    if (list.length && (!ui.agent || !list.some(function (a) { return a.id === ui.agent; }))) ui.agent = list[0].id;
+    let html = '<div class="card no-print"><div class="row">' + monthNavHtml('ag-month');
+    if (list.length) {
+      html += '<label>Agent<select id="ag-sheet">' + list.map(function (a) { return '<option' + (a.id === ui.agent ? ' selected' : '') + '>' + esc(a.id) + '</option>'; }).join('') + '</select></label>' +
+        '<button class="btn sec" data-act="agent-print">📄 Imprimer / PDF</button>' +
+        '<button class="btn sec" data-act="agent-ics">📅 Calendrier du mois (.ics)</button>' +
+        '<button class="btn sec" data-act="agent-ics-all">📅 Tous les mois générés (.ics)</button>';
+    }
+    html += '</div></div>';
+    if (!mm) html += '<p class="muted">Aucun planning pour ce mois. Générez-le d\'abord dans l\'onglet Planning équipe.</p>';
+    else if (list.length) html += agentSheetHtml(mm);
+    el.innerHTML = html;
+    const m = $('#ag-month'); if (m) m.onchange = function () { if (m.value) { ui.month = m.value; renderAgent(); } };
+    const ag = $('#ag-sheet'); if (ag) ag.onchange = function () { ui.agent = ag.value; renderAgent(); };
+  }
   function agentSheetHtml(mm) {
-    const list = visibleAgents(mm);
-    if (!list.length) return '';
-    if (!ui.agent || !list.some(function (a) { return a.id === ui.agent; })) ui.agent = list[0].id;
     const lines = agentLines(ui.agent, mm.days);
     let work = 0, hours = 0;
     lines.forEach(function (l) { if (l.as) { work++; hours += P.parseRange(l.as.range).dur / 60; } });
-    let h = '<div class="card agent-card"><div class="row no-print"><b>👤 Planning individuel</b>' +
-      '<label>Agent<select id="ag-sheet">' + list.map(function (a) { return '<option' + (a.id === ui.agent ? ' selected' : '') + '>' + esc(a.id) + '</option>'; }).join('') + '</select></label>' +
-      '<button class="btn sec" data-act="agent-print">📄 Imprimer / PDF</button>' +
-      '<button class="btn sec" data-act="agent-ics">📅 Calendrier du mois (.ics)</button>' +
-      '<button class="btn sec" data-act="agent-ics-all">📅 Tous les mois générés (.ics)</button></div>' +
+    let h = '<div class="card agent-card">' +
       '<h2 class="agent-title">' + esc(ui.agent) + ' — ' + monthLabel(ui.month) + '</h2>' +
       '<p class="muted">' + work + ' vacation(s), ' + num(hours) + ' h' + (lines.length > work ? ', ' + (lines.length - work) + ' jour(s) d\'absence' : '') + '. Le fichier .ics s\'importe dans le calendrier du téléphone (iPhone : ouvrir le fichier ; Google Agenda : Paramètres › Importer).</p>';
     if (!lines.length) return h + '<p class="muted">Aucune vacation ce mois-ci.</p></div>';
@@ -423,7 +436,6 @@
   }
   function bindPlanning() {
     const m = $('#pl-month'); if (m) m.onchange = function () { if (m.value) { ui.month = m.value; renderPlanning(); } };
-    const ag = $('#ag-sheet'); if (ag) ag.onchange = function () { ui.agent = ag.value; keepScroll(renderPlanning); };
     const sw = $('#sw-day'); if (sw) { sw.onchange = fillSwap; fillSwap(); $('#sw-a').onchange = suggestSwaps; }
   }
   // Génère (ou régénère) un mois ; renvoie le nombre de journées figées conservées.
@@ -963,8 +975,9 @@
     if (t.dataset.tab) { showTab(t.dataset.tab); return; }
     switch (t.dataset.act) {
       case 'generate': generate(); break;
-      case 'month-prev': if (ui.month > FIRST_MONTH) { ui.month = shiftMonth(ui.month, -1); renderPlanning(); } break;
-      case 'month-next': ui.month = shiftMonth(ui.month, 1); renderPlanning(); break;
+      case 'month-prev': if (ui.month > FIRST_MONTH) { ui.month = shiftMonth(ui.month, -1); render(); } break;
+      case 'month-next': ui.month = shiftMonth(ui.month, 1); render(); break;
+      case 'open-agent': e.preventDefault(); ui.agent = t.dataset.id; showTab('agent'); window.scrollTo(0, 0); break;
       case 'freeze-until': { const u = $('#fr-until').value; if (!u) { toast('Choisissez une date.'); break; } toast(setFrozen(function (d) { return d.date <= u; }, true) + ' journée(s) figée(s) jusqu\'au ' + u + '.'); break; }
       case 'freeze-all': toast(setFrozen(function () { return true; }, true) + ' journée(s) figée(s).'); break;
       case 'unfreeze-all': toast(setFrozen(function () { return true; }, false) + ' journée(s) dégelée(s).'); break;
