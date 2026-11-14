@@ -248,7 +248,7 @@
     }
     html += '</div></div>'; // encadré réduit à la ligne de boutons (choix du mois, génération, exports)
     if (!mm) {
-      el.innerHTML = html + '<p class="muted">Aucun planning pour ce mois. Vérifiez les paramètres et les demandes, puis cliquez sur « Générer le mois ».</p>';
+      el.innerHTML = html + previewHtml(P.previewMonth(state.cfg, state.requests, ui.month));
       bindPlanning(); return;
     }
     const warns = [];
@@ -337,6 +337,51 @@
       h += '</tr>';
     });
     return h + '</tbody></table></div><p class="print-legend"><span class="ico-chip">' + ICON_N1 + '</span> N1 · <span class="ico-chip">' + ICON_MEAL + '</span> repas · CDT = chef de tour · J1 / J2 / J3 = vacations du cycle · J0 = jour d\'option</p>';
+  }
+  /* ---------- Aperçu d'un mois non généré : structure du cycle + demandes ---------- */
+  const PREF_TXT = { nuit: 'nuit', soiree: 'soirée', tot: 'tôt', tard: 'tard', j0: 'J0' };
+  function previewHtml(pv) {
+    const days = pv.days;
+    const off = function (d) { return d.role === 'OFF' ? ' offday' : ''; };
+    const agents = sortedAgents().filter(function (a) { return !a.renfort || days.some(function (d) { return d.renfort[a.id] || d.absent[a.id]; }); });
+    const nPb = days.filter(function (d) { return d.problems.length; }).length;
+    let h = '<div class="card preview-info"><b>Mois pas encore généré</b> — aperçu de la structure du cycle et des demandes saisies. ' +
+      (nPb ? '<span class="deg">⚠ ' + nPb + ' jour(s) à problème (survolez le ⚠ sous le rôle).</span> ' : 'Effectif suffisant tous les jours de cycle. ') +
+      'Les vacations et horaires seront attribués à la génération.</div>';
+    h += '<div class="month-banner">' + monthLabel(ui.month) + ' <small>· aperçu</small></div><div class="grid-wrap"><table class="grid preview"><thead><tr><th class="sticky">Agent</th>';
+    days.forEach(function (d) { h += '<th class="' + (d.dayType !== 'weekday' ? 'we' : '') + off(d) + '">' + DOW[P.dow(d.date)] + '<br>' + d.date.slice(8) + '</th>'; });
+    h += '</tr><tr><th class="sticky" title="Disponibles / besoin de couverture (BC)">Rôle</th>';
+    days.forEach(function (d) {
+      let sub = '';
+      if (d.role === 'J0') sub = '<br><small>' + d.avail.filter(function (id) { return !d.renfort[id]; }).length + ' dispo</small>';
+      else if (d.role !== 'OFF') {
+        const n = d.avail.length, deg = d.bc !== null && n < d.bc;
+        sub = '<br><small class="' + (deg ? 'deg' : '') + '" title="' + n + ' agent(s) disponible(s) pour un besoin de couverture (BC) de ' + d.bc + '">' + n + '/' + d.bc + '</small>' +
+          (d.problems.length ? '<small class="bad" title="' + esc(d.problems.join('\n')) + '">⚠</small>' : '');
+      }
+      h += '<th class="role-' + d.role + off(d) + '" title="' + esc(P.DAY_TYPE_LABEL[d.dayType]) + (d.period ? ' · période ' + (d.period === 'option' ? 'd\'option' : 'creuse') : '') + '">' + d.role + sub + '</th>';
+    });
+    h += '</tr></thead><tbody>';
+    agents.forEach(function (a) {
+      h += '<tr><td class="sticky">' + esc(a.id) + (a.cdt ? ' <small class="muted">CDT</small>' : '') + (a.renfort ? ' <small class="muted">renf.</small>' : '') + '</td>';
+      days.forEach(function (d) {
+        if (d.role === 'OFF') { h += '<td class="off offday"></td>'; return; }
+        if (d.absent[a.id]) { h += '<td class="abs" title="' + esc(absText(d, a.id)) + '">' + esc(d.absent[a.id]) + '</td>'; return; }
+        if (d.unavailable[a.id]) { h += '<td class="off na" title="Indisponible (' + esc(d.unavailable[a.id]) + ')">—</td>'; return; }
+        if (d.avail.indexOf(a.id) < 0) { h += '<td class="off"></td>'; return; } // renfort non disponible
+        const tags = [];
+        if (d.renfort[a.id]) tags.push('<span class="tag t-ren" title="Renfort disponible">dispo</span>');
+        if (d.fixed[a.id]) tags.push('<span class="tag t-fix" title="Créneau imposé">📌 ' + esc(d.fixed[a.id]) + '</span>');
+        (d.prefs[a.id] || []).forEach(function (p) {
+          const v = PREF_TXT[p.value] || p.value;
+          tags.push(p.type === 'VEUT' ? '<span class="tag t-veut" title="Souhaite : ' + esc(v) + '">♥ ' + esc(v) + '</span>' : '<span class="tag t-evite" title="Évite : ' + esc(v) + '">✕ ' + esc(v) + '</span>');
+        });
+        if (d.cdt[a.id] && !a.cdt) tags.push('<span class="tag t-cdt" title="Chef de tour sur la période (demande)">CDT</span>');
+        h += '<td class="pv pv-' + d.role + '">' + tags.join('') + '</td>';
+      });
+      h += '</tr>';
+    });
+    return h + '</tbody></table></div><p class="muted">Case vide teintée = agent disponible ce jour-là · gris = absence (libellé de la demande) · ♥ souhaite / ✕ évite · 📌 créneau imposé · sous le rôle : disponibles / BC, ⚠ effectif insuffisant, sans chef de tour, nuits non couvertes ou quota dépassé.</p>';
   }
   /* ---------- Planning individuel : vue, impression, export calendrier (.ics) ---------- */
   const ABS_NAME = { CF: 'Congé fractionné', CYC: 'Congé cycle', RS: 'Récup RS', RMT: 'Récup RMT', RPT: 'Récup RPT', REC: 'Récup', FORM: 'Formation', ABS: 'Absence',

@@ -57,6 +57,17 @@ table.grid td.k-J3 small { color: #d3d9ff; }
 table.grid td.k-J0 { background: var(--j0); }
 table.grid td.abs { background: var(--abs); color: var(--muted); }
 table.grid td.off { background: var(--off); }
+/* aperçu d'un mois non généré : jours disponibles légèrement teintés, demandes en étiquettes */
+table.grid td.pv-J1 { background: color-mix(in srgb, var(--j1) 45%, var(--card)); }
+table.grid td.pv-J2 { background: color-mix(in srgb, var(--j2) 45%, var(--card)); }
+table.grid td.pv-J3 { background: color-mix(in srgb, var(--j3) 22%, var(--card)); }
+table.grid td.pv-J0 { background: color-mix(in srgb, var(--j0) 45%, var(--card)); }
+table.grid td.na { color: var(--muted); }
+table.grid th small.bad { display: inline; margin-left: 3px; cursor: help; }
+.tag { display: inline-block; font-size: 10px; line-height: 1.3; padding: 0 4px; margin: 1px; border-radius: 4px; background: var(--card); border: 1px solid var(--line); color: var(--ink); white-space: nowrap; }
+.tag.t-veut { border-color: #2a8a4a; color: #2a8a4a; } .tag.t-evite { border-color: #c0392b; color: #c0392b; }
+.tag.t-fix { border-color: var(--accent); color: var(--accent); } .tag.t-cdt, .tag.t-ren { color: var(--muted); }
+.month-banner small { font-size: 0.6em; font-weight: 400; opacity: .8; }
 table.grid td.lock::after { content: " 🔒"; font-size: 10px; }
 .role-J1 { color: var(--r-j1); } .role-J2 { color: var(--r-j2); } .role-J3 { color: var(--r-j3); } .role-J0 { color: var(--r-j0); } .role-OFF { color: var(--muted); }
 table.stats td, table.stats th { border-bottom: 1px solid var(--line); padding: 5px 9px; text-align: right; }

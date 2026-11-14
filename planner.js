@@ -850,6 +850,43 @@
     return { dates: dates, changes: changes, result: res };
   }
 
+  /* ---------- Aperçu d'un mois non généré : structure du cycle et demandes des agents ----------
+   * Pour chaque jour : rôle (J1, J2, J3, J0, OFF), type de jour, période, et par agent son état d'après les demandes :
+   * absent (libellé affiché), indisponible sans affichage (congé cycle le jour du J0), renfort disponible,
+   * souhaits / évitements, créneau imposé, chef de tour sur la période. Les jours de cycle reprennent le contrôle
+   * d'effectif de staffingCheck (disponibles, BC, problèmes). */
+  function previewMonth(cfg, requests, month) {
+    const range = monthRange(month), from = range[0], to = range[1];
+    const warnings = [];
+    const idx = indexRequests(cfg, requests, from, to, warnings);
+    const roles = buildRoles(cfg.cycle, from, to);
+    const hol = holidaySet(from, addDays(to, 1), cfg.holidays);
+    const check = staffingCheck(cfg, requests, from, to);
+    const days = [];
+    for (let k = from; k <= to; k = addDays(k, 1)) {
+      const role = roles[k] || 'OFF', dt = dayType(k, hol);
+      const day = { date: k, dayType: dt, role: role, period: periodOf(cfg, k), absent: {}, absentType: {}, unavailable: {}, avail: [], renfort: {}, prefs: {}, fixed: {}, cdt: {}, problems: [], bc: null };
+      days.push(day);
+      if (role === 'OFF') continue;
+      cfg.agents.forEach(function (a) {
+        const key = a.id + '|' + k;
+        if (idx.absent.has(key)) {
+          if (idx.absType.get(key) === 'CYC' && role !== 'J1' && role !== 'J2' && role !== 'J3') { day.unavailable[a.id] = 'congé cycle'; return; }
+          day.absent[a.id] = idx.absent.get(key); day.absentType[a.id] = idx.absType.get(key); return;
+        }
+        if (a.renfort) { if (!idx.renfort.has(key)) return; day.renfort[a.id] = true; }
+        day.avail.push(a.id);
+        if (a.cdt || idx.cdt.has(key)) day.cdt[a.id] = true;
+        if (idx.prefs.has(key)) day.prefs[a.id] = idx.prefs.get(key).filter(function (p) { return (p.value === 'j0') === (role === 'J0'); });
+        if (day.prefs[a.id] && !day.prefs[a.id].length) delete day.prefs[a.id];
+        if (idx.fixed.has(key)) day.fixed[a.id] = idx.fixed.get(key);
+      });
+      const c = check[k];
+      if (c) { day.problems = c.problems; day.bc = c.bc; day.quota = c.quota; }
+    }
+    return { days: days, warnings: warnings };
+  }
+
   /* ---------- Contrôle chef de tour (rang 1) ---------- */
   function checkCdt(day) {
     day.warnings = (day.warnings || []).filter(function (w) { return w.indexOf('CDT : ') !== 0; });
@@ -964,6 +1001,6 @@
     DEFAULT_OPTION_PERIODS: DEFAULT_OPTION_PERIODS, DEFAULT_QUOTAS: DEFAULT_QUOTAS, DEFAULT_BC: DEFAULT_BC, DEFAULT_QUOTA_TYPES: DEFAULT_QUOTA_TYPES,
     quotaFor: quotaFor, bcFor: bcFor, quotaCheck: quotaCheck, cardinalOf: cardinalOf,
     ABSENCE_TYPES: ABSENCE_TYPES, absenceLabel: absenceLabel, cycleSpan: cycleSpan, requestSpan: requestSpan,
-    swapAgents: swapAgents, updateDays: updateDays, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
+    swapAgents: swapAgents, updateDays: updateDays, previewMonth: previewMonth, caps: caps, staffingCheck: staffingCheck, swapImpact: swapImpact, checkCdt: checkCdt, effDays: effDays, hungarian: hungarian, ZERO: ZERO
   };
 });

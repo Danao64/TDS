@@ -363,6 +363,26 @@ all.filter(d => d.role === 'J3').forEach(d => {
   Object.keys(worst).forEach(k => assert(worst[k] < 2, 'écart de ' + k + ' trop grand : ' + worst[k].toFixed(2)));
 }
 
+// ---- aperçu d'un mois non généré : structure du cycle et demandes
+{
+  const rq = [{ agent: 'A2', from: '2027-06-08', to: '2027-06-08', type: 'FORM', value: 'GB' }, { agent: 'A5', from: '2027-06-06', to: '2027-06-06', type: 'CYC' },
+    { agent: 'A3', from: '2027-06-07', to: '2027-06-07', type: 'VEUT', value: 'nuit' }, { agent: 'A6', from: '2027-06-07', to: '2027-06-07', type: 'FIXE', value: 'J1-3' },
+    { agent: 'R1', from: '2027-06-08', to: '2027-06-08', type: 'RENFORT' }, { agent: 'A7', from: '2027-06-11', to: '2027-06-11', type: 'VEUT', value: 'j0' }];
+  const pv = P.previewMonth(cfg, rq, '2027-06');
+  const R6 = P.buildRoles(cfg.cycle, '2027-06-01', '2027-06-30');
+  assert.strictEqual(pv.days.length, 30); pv.days.forEach(d => assert.strictEqual(d.role, R6[d.date] || 'OFF', d.date));
+  const g = k => pv.days.find(d => d.date === k);
+  assert.strictEqual(g('2027-06-08').absent.A2, 'GB');
+  ['2027-06-06', '2027-06-07', '2027-06-08'].forEach(k => assert.strictEqual(g(k).absent.A5, 'Cyc'));
+  assert.strictEqual(g('2027-06-11').role, 'J0'); assert(g('2027-06-11').unavailable.A5 && !g('2027-06-11').absent.A5, 'congé cycle : pas de J0 le 6e jour, rien affiché');
+  assert.deepStrictEqual(g('2027-06-07').prefs.A3, [{ agent: 'A3', type: 'VEUT', value: 'nuit' }]); assert.strictEqual(g('2027-06-07').fixed.A6, 'J1-3');
+  assert(g('2027-06-08').renfort.R1 && g('2027-06-08').avail.includes('R1') && !g('2027-06-07').avail.includes('R1'));
+  assert(g('2027-06-11').prefs.A7 && !g('2027-06-10').prefs.A7);
+  assert.strictEqual(g('2027-06-08').avail.length, 6); // 7 réguliers - A2 - A5 + R1
+  assert.strictEqual(g('2027-06-08').bc, P.bcFor(cfg, '2027-06-08', 'J3', g('2027-06-08').dayType));
+  console.log('aperçu d\'un mois non généré : OK');
+}
+
 // ---- mail de dépôt des demandes
 {
   const rq = [
