@@ -431,7 +431,8 @@
   }
 
   /* ---------- Génération d'un mois ---------- */
-  const DEFAULT_WEIGHTS = { hours: 0.125, night: 8, evening: 1, late: 3, early: 2, nightWE: 2, n1: 8, meal: 2, j2tot: 25, pref: 40, n1Extra: 40 };
+  // J2 tardifs et débuts tôt ne sont plus des critères d'équilibre (décision de Damien, 26/11/2026) : comptés pour information seulement.
+  const DEFAULT_WEIGHTS = { hours: 0.125, night: 8, evening: 1, nightWE: 2, n1: 8, meal: 2, j2tot: 25, pref: 40, n1Extra: 40 };
   // Priorités d'équilibre (décision de Damien, 13/11/2026) : N1, nuits et repas passent avant tout le reste.
   // Poids utilisés par le lissage du mois à la place des pondérations ordinaires pour ces trois compteurs
   // (environ 100 fois plus lourds) : un échange qui les déséquilibre n'est jamais accepté pour gagner sur
@@ -530,7 +531,7 @@
       // taux d'équipe (hors renforts) : l'écart se mesure par jour travaillé (N1 et repas compris : chaque agent,
       // chef de tour ou non, doit en faire autant)
       const rt = {};
-      ['hours', 'nights', 'evenings', 'late', 'early', 'nightWE', 'n1', 'meal'].forEach(function (key) {
+      ['hours', 'nights', 'evenings', 'nightWE', 'n1', 'meal'].forEach(function (key) {
         let s = 0, d = 0;
         regular.forEach(function (id) { s += counters[id][key]; d += effDays(counters[id], cfg, key); });
         rt[key] = d ? s / d : 0;
@@ -544,8 +545,7 @@
           return freeSlots.map(function (s) {
             const m = slotMetrics(kind, s.rank, s.range, dt, cfg);
             let c = W.hours * dev(id, 'hours') * m.hours + W.night * dev(id, 'nights') * m.night +
-              W.evening * dev(id, 'evenings') * m.evening + W.late * dev(id, 'late') * m.late +
-              W.early * dev(id, 'early') * m.early + W.nightWE * dev(id, 'nightWE') * m.nightWE;
+              W.evening * dev(id, 'evenings') * m.evening + W.nightWE * dev(id, 'nightWE') * m.nightWE;
             if (m.night) {
               c += W.n1 * dev(id, 'n1') + W.meal * dev(id, 'meal');
               if (!renfortIds.has(id) && monthN[id] >= CAP.nights) c += CAP_PENALTY;   // plafond mensuel de nuits
@@ -726,7 +726,7 @@
      * cela réduit l'écart global au taux d'équipe (somme pondérée des écarts au carré), sans toucher aux
      * journées figées, vacations verrouillées ou imposées, au rang 1 chef de tour, ni au J0 après N1. */
     (function refine() {
-      const KEYS = [['hours', 'hours'], ['nights', 'night'], ['evenings', 'evening'], ['late', 'late'], ['early', 'early'], ['nightWE', 'nightWE'], ['n1', 'n1'], ['meal', 'meal']];
+      const KEYS = [['hours', 'hours'], ['nights', 'night'], ['evenings', 'evening'], ['nightWE', 'nightWE'], ['n1', 'n1'], ['meal', 'meal']];
       const rt = {}, PRIO = Object.assign({}, DEFAULT_PRIORITY, cfg.priority || {});
       KEYS.forEach(function (kw) {
         let s = 0, d = 0;
@@ -972,7 +972,7 @@
   /* ---------- Impact d'un échange sur l'équité ----------
    * counters : compteurs cumulés (période d'équité) incluant déjà le jour. Renvoie la variation de l'écart global
    * (somme pondérée des écarts au carré au taux d'équipe) pour les deux agents : < 0 = l'échange rééquilibre. */
-  const SWAP_KEYS = [['hours', 'hours', 'hours'], ['nights', 'night', 'night'], ['evenings', 'evening', 'evening'], ['late', 'late', 'late'], ['early', 'early', 'early'], ['nightWE', 'nightWE', 'nightWE'], ['n1', 'n1', null], ['meal', 'meal', null]];
+  const SWAP_KEYS = [['hours', 'hours', 'hours'], ['nights', 'night', 'night'], ['evenings', 'evening', 'evening'], ['nightWE', 'nightWE', 'nightWE'], ['n1', 'n1', null], ['meal', 'meal', null]];
   function swapImpact(cfg, counters, day, a, b) {
     const W = Object.assign({}, DEFAULT_WEIGHTS, cfg.weights || {});
     const x = day.assign[a], y = day.assign[b];

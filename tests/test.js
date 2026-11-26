@@ -502,6 +502,16 @@ const c = P.computeCounters(all, cfg, {});
   const res2 = P.generateMonth(cfg, rqF, bases['2027-03'], '2027-03', null, hist(all.filter(z => z.date < '2027-03-01'), '2027-03'));
   assert.strictEqual(JSON.stringify(res.days), JSON.stringify(res2.days));
 }
+// ---- J2 tardifs et débuts tôt : comptés pour information, plus des critères d'équilibre
+{
+  assert(!('late' in P.DEFAULT_WEIGHTS) && !('early' in P.DEFAULT_WEIGHTS), 'plus de poids J2 tardif / début tôt');
+  const b1 = P.computeCounters(all.filter(z => z.date < '2027-04-01'), cfg, {});
+  const b2 = JSON.parse(JSON.stringify(b1)); b2.A1.late += 40; b2.A2.early += 40; b2.A3.late -= 20;
+  const h = hist(all.filter(z => z.date < '2027-04-01'), '2027-04');
+  const r1 = P.generateMonth(cfg, requests, b1, '2027-04', null, h), r2 = P.generateMonth(cfg, requests, b2, '2027-04', null, h);
+  assert.strictEqual(JSON.stringify(r1.days.map(d => d.assign)), JSON.stringify(r2.days.map(d => d.assign)), 'les compteurs J2 tardifs / débuts tôt ne changent plus la génération');
+  console.log('J2 tardifs / débuts tôt : OK (hors équilibre)');
+}
 console.table(Object.fromEntries(Object.entries(c).map(([k, v]) => [k, { h: +v.hours.toFixed(1), nuits: v.nights, N1: v.n1, repas: v.meal, soir: v.evenings, nWE: v.nightWE, tard: v.late, tot: v.early, j0: v.j0, jours: v.days }])));
 console.log('nuits:', nights, '| jours sans CDT:', noCdt, '| J0 hors N1:', j0n);
 console.log('agents de nuit avec J2 tôt la veille:', withEarly + '/' + nightAg, '(' + Math.round(100 * withEarly / nightAg) + ' %) | équipe de nuit conforme au plan:', planOk + '/' + planned);

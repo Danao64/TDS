@@ -8,7 +8,7 @@
   const MONTHS_FR = ['JANVIER', 'FÉVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN', 'JUILLET', 'AOÛT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DÉCEMBRE'];
   const DOW = ['Di', 'Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa'];
   const TYPES = { CF: 'Congé fractionné (CF)', CYC: 'Congé cycle (Cyc)', RS: 'Récup RS', RMT: 'Récup RMT', RPT: 'Récup RPT', REC: 'Récup (non précisée)', FORM: 'Formation (valeur : code, ex. GB)', ABS: 'Autre absence', RENFORT: 'Renfort disponible', VEUT: 'Souhaite', EVITE: 'Évite', FIXE: 'Créneau imposé', CDT: 'Chef de tour (sur la période)' };
-  const COUNTER_FIELDS = [['hours', 'Heures'], ['nights', 'Nuits'], ['n1', 'N1 🌙'], ['meal', 'Repas 🍽️'], ['evenings', 'Soirées J3'], ['nightWE', 'Nuits WE/férié'], ['late', 'J2 tardifs'], ['early', 'Débuts tôt'], ['j0', 'J0']];
+  const COUNTER_FIELDS = [['hours', 'Heures'], ['nights', 'Nuits'], ['n1', 'N1 🌙'], ['meal', 'Repas 🍽️'], ['evenings', 'Soirées J3'], ['nightWE', 'Nuits WE/férié'], ['j0', 'J0']];
 
   /* ---------- État ---------- */
   function defaultState() {
@@ -39,6 +39,14 @@
   let state = load();
   // Mise à jour des pondérations par défaut (v2 : nuit 4 → 8 pour un rattrapage plus franc sur l'année)
   let migrated = false;
+  let countersMig = false;
+  if (!state.countersV) { // J2 tardifs, débuts tôt et jours retirés des compteurs initiaux et de l'équilibre (Damien, 26/11/2026) ; autres valeurs conservées
+    let hadDays = false;
+    Object.keys(state.initial || {}).forEach(function (id) { const ini = state.initial[id]; if (ini) { if (+ini.days) hadDays = true; delete ini.late; delete ini.early; delete ini.days; } });
+    if (state.cfg && state.cfg.weights) { delete state.cfg.weights.late; delete state.cfg.weights.early; }
+    if (hadDays) Object.keys(state.months || {}).forEach(function (m) { state.months[m].stale = 'les jours travaillés des compteurs initiaux ont été retirés'; });
+    state.countersV = 1; countersMig = true;
+  }
   if (!state.weightsVersion) {
     if (state.cfg.weights && state.cfg.weights.night === 4) { state.cfg.weights.night = P.DEFAULT_WEIGHTS.night; migrated = true; }
     state.weightsVersion = 2;
@@ -939,7 +947,7 @@
     const c = state.cfg, w = Object.assign({}, P.DEFAULT_WEIGHTS, c.weights);
     let h = '<div class="card"><h2 style="margin-top:0">Équipe et compteurs initiaux</h2>' +
       '<p class="muted">Compteurs de départ (cumul avant le premier mois généré, par exemple le report de l\'année précédente). Laisser à 0 pour une équipe qui démarre à zéro.</p>' +
-      '<div style="overflow:auto"><table class="list" id="ag-table"><thead><tr><th>Agent</th><th>Renfort</th><th>CDT</th>' + COUNTER_FIELDS.map(function (f) { return '<th>' + f[1] + '</th>'; }).join('') + '<th>Jours</th><th></th></tr></thead><tbody>';
+      '<div style="overflow:auto"><table class="list" id="ag-table"><thead><tr><th>Agent</th><th>Renfort</th><th>CDT</th>' + COUNTER_FIELDS.map(function (f) { return '<th>' + f[1] + '</th>'; }).join('') + '<th></th></tr></thead><tbody>';
     sortedAgents().forEach(function (a) { h += agentRow(a); });
     h += '</tbody></table></div><button class="btn sec" data-act="ag-add">+ Agent</button>' +
       '<p class="muted"><b>CDT</b> (chef de tour) : seul un CDT peut tenir J1-1, J2-1 et J3-1 ; s\'il n\'y en a aucun de disponible ce jour-là, une alerte est affichée. <b>Renfort</b> : jamais planifié, sauf les jours saisis dans l\'onglet Demandes (type « Renfort disponible »).</p></div>';
@@ -962,7 +970,7 @@
       '<label>Crédit d\'absence pour l\'équité (0 à 1)<input type="number" id="p-abscredit" step="0.1" min="0" max="1" style="width:90px" value="' + (c.absenceCredit === undefined ? 1 : c.absenceCredit) + '"></label>' +
       '<label>Nuits max. par agent et par mois<input type="number" id="p-maxnights" min="1" style="width:90px" value="' + P.caps(c).nights + '"></label>' +
       '<label>N1 max. par agent et par mois<input type="number" id="p-maxn1" min="1" style="width:90px" value="' + P.caps(c).n1 + '"></label></div><div class="row" style="margin-top:10px">' +
-      [['hours', 'Heures (par h)'], ['night', 'Nuit'], ['evening', 'Soirée J3'], ['late', 'J2 tardif'], ['early', 'Début tôt'], ['nightWE', 'Nuit WE/férié'], ['n1', 'N1 🌙 (par écart)'], ['meal', 'Repas 🍽️ (par écart)'], ['n1Extra', '2e N1 du mois (exceptionnelle)'], ['j2tot', 'J2 tôt avant une nuit'], ['pref', 'Souhait / évitement']].map(function (x) {
+      [['hours', 'Heures (par h)'], ['night', 'Nuit'], ['evening', 'Soirée J3'], ['nightWE', 'Nuit WE/férié'], ['n1', 'N1 🌙 (par écart)'], ['meal', 'Repas 🍽️ (par écart)'], ['n1Extra', '2e N1 du mois (exceptionnelle)'], ['j2tot', 'J2 tôt avant une nuit'], ['pref', 'Souhait / évitement']].map(function (x) {
         return '<label>' + x[1] + '<input type="number" step="any" min="0" data-w="' + x[0] + '" value="' + w[x[0]] + '" style="width:90px"></label>';
       }).join('') +
       '</div><p class="muted">Crédit d\'absence : à 1, un jour d\'absence (congé, récup…) compte comme un jour de présence pour l\'équité des nuits, N1, repas, soirées, etc. : un agent absent rattrape ensuite son retard ; à 0, seule la présence compte. Les heures ne sont pas concernées. Plus le poids est élevé, plus l\'algorithme évite de charger un agent déjà au-dessus du taux d\'équipe sur ce critère. Le poids « souhait » doit rester élevé pour que les demandes soient prioritaires sur l\'équité.</p>' +
@@ -986,7 +994,7 @@
     const ini = state.initial[a.id] || {};
     return '<tr data-reg="' + (a.reg !== undefined ? a.reg : agentReg(a)) + '"><td><input data-k="id" value="' + esc(a.id) + '" size="6"></td><td><input type="checkbox" data-k="renfort"' + (a.renfort ? ' checked' : '') + '></td><td><input type="checkbox" data-k="cdt"' + (a.cdt ? ' checked' : '') + '></td>' +
       COUNTER_FIELDS.map(function (f) { return '<td><input type="number" step="any" data-c="' + f[0] + '" value="' + (ini[f[0]] || 0) + '" style="width:70px"></td>'; }).join('') +
-      '<td><input type="number" data-c="days" value="' + (ini.days || 0) + '" style="width:70px"></td><td><button class="x" data-act="ag-del">✕</button></td></tr>';
+      '<td><button class="x" data-act="ag-del">✕</button></td></tr>';
   }
   function saveParams() {
     try {
@@ -1168,5 +1176,6 @@
     save(); render();
     toast('Périodes d\'option 2027 de la note de service enregistrées : du 13/01 au 23/07 et du 01/09 au 17/12 (le reste de l\'année en période creuse). ↶ Annuler pour revenir aux anciennes.');
   }
+  if (countersMig && !migrated) save();
   if (migrated) { save(); toast('Pondération « Nuit » passée de 4 à 8 (nouveau réglage par défaut, rattrapage des nuits sur l\'année). Modifiable dans Paramètres.'); }
 })();
