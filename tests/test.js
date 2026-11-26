@@ -248,7 +248,8 @@ all.filter(d => d.role === 'J3').forEach(d => {
   assert.deepStrictEqual(Object.keys(chk), ['2027-01-01', '2027-01-02', '2027-01-03'], 'seuls les jours de cycle sont contrôlés');
   assert(chk['2027-01-01'].problems.includes('aucun chef de tour'));
   assert.strictEqual(chk['2027-01-02'].avail.length, 3, '7 agents - 4 absents, renfort non compté sans demande RENFORT');
-  assert(chk['2027-01-02'].problems[0].startsWith('3 agent(s) pour 4 minimum'));
+  assert(chk['2027-01-02'].problems.some(x => x.startsWith('3 agent(s) pour 4 minimum')));
+  assert(chk['2027-01-02'].problems.some(x => /quota d'absences dépassé : 4/.test(x)), 'la formation compte désormais sur le quota');
   assert.deepStrictEqual(chk['2027-01-03'].problems, []);
   console.log('contrôle des demandes : OK');
 }
@@ -265,7 +266,9 @@ all.filter(d => d.role === 'J3').forEach(d => {
   const c4 = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF').concat(abs(['A6'], 'RPT')), '2027-01-08', '2027-01-08')['2027-01-08'];
   assert(c4.problems.some(p => /quota d'absences dépassé : 4 pour un alpha de 3/.test(p)), c4.problems.join());
   const cf = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF').concat(abs(['A6'], 'FORM')), '2027-01-08', '2027-01-08')['2027-01-08'];
-  assert(!cf.problems.some(p => /quota/.test(p)), 'une formation ne compte pas dans le quota');
+  assert(cf.problems.some(p => /quota d'absences dépassé : 4 pour un alpha de 3/.test(p)), 'formation sans bêta disponible : décomptée sur alpha');
+  const cfA = P.staffingCheck(cfg, abs(['A2', 'A3', 'A5'], 'CF').concat(abs(['A6'], 'ABS')), '2027-01-08', '2027-01-08')['2027-01-08'];
+  assert(!cfA.problems.some(p => /quota/.test(p)), 'autre absence (ABS) : non décomptée');
   // période normale (= période d'option), cardinal 8 : alpha 2 + bêta 1 en semaine → une RS peut passer sur bêta
   const c8 = { ...cfg, agents: cfg.agents.concat([{ id: 'A8', renfort: false, cdt: false }]) };
   const k = '2027-06-08'; // mardi, J3, période d'option
@@ -273,6 +276,33 @@ all.filter(d => d.role === 'J3').forEach(d => {
   const ab = (ids, type) => ids.map(a => ({ agent: a, from: k, to: k, type }));
   assert.strictEqual(P.staffingCheck(c8, ab(['A2', 'A3'], 'CF').concat(ab(['A5'], 'RS')), k, k)[k].quota.over, 0, '2 CF + 1 RS sur bêta : accepté');
   assert.strictEqual(P.staffingCheck(c8, ab(['A2', 'A3', 'A5'], 'CF'), k, k)[k].quota.over, 1, '3 CF pour alpha 2 : dépassé');
+  // bêta d'abord pour les formations, puis pour les RS ; la formation passe avant la RS
+  const qf = P.staffingCheck(c8, ab(['A2', 'A3'], 'CF').concat(ab(['A5'], 'FORM')), k, k)[k].quota;
+  assert.deepStrictEqual([qf.formBeta, qf.rsBeta, qf.used, qf.over], [1, 0, 2, 0], '2 CF + 1 formation sur bêta : accepté');
+  const qfr = P.staffingCheck(c8, ab(['A2'], 'CF').concat(ab(['A5'], 'FORM'), ab(['A6'], 'RS')), k, k)[k].quota;
+  assert.deepStrictEqual([qfr.formBeta, qfr.rsBeta, qfr.used, qfr.over], [1, 0, 2, 0], 'formation sur bêta, RS sur alpha');
+  const qfr2 = P.staffingCheck(c8, ab(['A2', 'A3'], 'CF').concat(ab(['A5'], 'FORM'), ab(['A6'], 'RS')), k, k)[k].quota;
+  assert.strictEqual(qfr2.over, 1, '2 CF + formation (bêta) + RS (alpha) : dépassé de 1');
+  const qff = P.staffingCheck(c8, ab(['A5', 'A6'], 'FORM').concat(ab(['A7'], 'RS')), k, k)[k].quota;
+  assert.deepStrictEqual([qff.formBeta, qff.rsBeta, qff.used], [1, 0, 2], '2 formations : 1 sur bêta, 1 sur alpha ; la RS reste sur alpha');
+  // cardinal 7, période normale : bêta 0,66 en semaine, mis en commun sur le cycle (2 jours × 0,66 → 2 places)
+  const ab2 = (ids, type, day) => ids.map(a => ({ agent: a, from: day, to: day, type }));
+  const [d7, d8] = ['2027-06-07', '2027-06-08']; // J2 lundi, J3 mardi (J1 = dimanche 06/06, bêta 0)
+  assert.strictEqual(P.quotaFor(cfg, d7, 'J2', 'weekday').beta, 0.66);
+  const rqP = ab2(['A2', 'A3'], 'CF', d7).concat(ab2(['A5'], 'FORM', d7), ab2(['A2', 'A3'], 'CF', d8), ab2(['A6'], 'RS', d8));
+  const qp = P.staffingCheck(cfg, rqP, d7, d8);
+  assert.deepStrictEqual([qp[d7].quota.cycleBeta, qp[d7].quota.formBeta, qp[d7].quota.over, qp[d8].quota.rsBeta, qp[d8].quota.over], [2, 1, 0, 1, 0], 'formation et RS sur les 2 places bêta du cycle');
+  const qp2 = P.staffingCheck(cfg, rqP.concat(ab2(['A7'], 'RS', d7)), d7, d8);
+  assert.deepStrictEqual([qp2[d7].quota.onBeta, qp2[d7].quota.over, qp2[d8].quota.rsBeta, qp2[d8].quota.over], [2, 0, 0, 1], '3e absence bêta : plus de place, la RS du mardi passe sur alpha');
+  // génération : mêmes quotas par cycle (pas d'alerte quand tout tient sur bêta)
+  const gq = P.generateMonth(cfg, rqP, {}, '2027-06', null, []);
+  [d7, d8].forEach(k => assert(!gq.days.find(d => d.date === k).warnings.some(w => /Quota/.test(w)), 'alerte de quota à tort ' + k));
+  // cardinal d'équipe réglé dans les paramètres : prioritaire sur le nombre d'agents
+  const cc = { ...cfg, agents: cfg.agents.filter(a => !['A6', 'A7'].includes(a.id)), cardinal: 7 };
+  assert.strictEqual(P.cardinalOf(cc), 7); assert.strictEqual(P.quotaFor(cc, d7, 'J2', 'weekday').cardinal, 7);
+  // cardinal 6 : pas de place sur bêta
+  const c6 = { ...cfg, agents: cfg.agents.filter(a => a.id !== 'A7') };
+  assert.strictEqual(P.staffingCheck(c6, ab(['A5'], 'FORM'), k, k)[k].quota.onBeta, 0, 'cardinal 6 : rien sur bêta');
   // période creuse, cardinal 8, samedi : alpha propre à chaque vacation (J1 4, J2 3, J3 4)
   assert.strictEqual(P.quotaFor(c8, '2027-01-02', 'J2', 'saturday').alpha, 3);
   assert.strictEqual(P.quotaFor(c8, '2027-01-02', 'J1', 'saturday').alpha, 4);
@@ -285,7 +315,7 @@ all.filter(d => d.role === 'J3').forEach(d => {
   const d5 = res.days.find(d => d.date === '2027-01-08');
   assert(d5.warnings.some(w => /Quota d'absences dépassé : 4/.test(w)), d5.warnings.join());
   assert.strictEqual(d5.bc, 6);
-  console.log('quotas et BC : OK (alpha / bêta selon cardinal et période, formation non décomptée, BC par vacation)');
+  console.log('quotas et BC : OK (alpha / bêta selon cardinal et période, formations puis RS sur bêta, 0,66 mis en commun par cycle, BC par vacation)');
 }
 
 // ---- impact d'un échange : rééquilibrer = négatif, aggraver = positif

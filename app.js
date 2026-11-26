@@ -23,7 +23,7 @@
           normal: ['J1', 'J2', 'J3', 'OFF', 'OFF', 'OFF'],
           optionPeriods: JSON.parse(JSON.stringify(P.DEFAULT_OPTION_PERIODS))
         },
-        holidays: [], minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j0RangeSunday: '10:00-18:00', j2EarlyMax: '10:00', absenceCredit: 1,
+        holidays: [], cardinal: 7, minStaff: 4, nightCount: 3, j0Range: '10:00-18:30', j0RangeSunday: '10:00-18:00', j2EarlyMax: '10:00', absenceCredit: 1,
         weights: Object.assign({}, P.DEFAULT_WEIGHTS)
       },
       initial: {}, requests: [], months: {}
@@ -49,6 +49,14 @@
     const cur = JSON.stringify(state.cfg.cycle.optionPeriods || []), nxt = JSON.stringify(P.DEFAULT_OPTION_PERIODS);
     if (cur !== nxt) { ndsUpdated = cur; state.cfg.cycle.optionPeriods = JSON.parse(nxt); }
     state.ndsVersion = 2027;
+  }
+  if (!state.cardinalV) { // équipe de 7 contrôleurs : cardinal d'équipe des quotas (réglable dans Paramètres)
+    if (!state.cfg.cardinal) state.cfg.cardinal = 7;
+    state.cardinalV = 1;
+  }
+  if (!state.quotaFormV) { // les formations comptent désormais sur le quota (bêta d'abord, puis alpha)
+    if (state.cfg.quotaTypes && state.cfg.quotaTypes.indexOf('FORM') < 0) state.cfg.quotaTypes.push('FORM');
+    state.quotaFormV = 1;
   }
   if (!state.cfg.j0RangeSunday) state.cfg.j0RangeSunday = '10:00-18:00'; // J0 du dimanche / férié (note de service)
   if (!state.cfg.tablesCreuse) state.cfg.tablesCreuse = JSON.parse(JSON.stringify(P.DEFAULT_TABLES_CREUSE)); // grilles de période creuse (ajout)
@@ -736,7 +744,7 @@
       for (let k = x.from, g = 0; k <= x.to && g < 400; k = P.addDays(k, 1), g++) {
         const d = days[k];
         if (d && d.problems.length) bad.push({ date: k, role: d.role, problems: d.problems });
-        if (d && d.quota && (!x.maxQ || d.quota.used > x.maxQ.used)) x.maxQ = { used: d.quota.used, alpha: d.quota.alpha, date: k };
+        if (d && d.quota && (!x.maxQ || d.quota.used > x.maxQ.used)) x.maxQ = { used: d.quota.used, alpha: d.quota.alpha, onBeta: d.quota.onBeta, date: k };
       }
       bad.cycle = x.cyc ? [x.from, x.to] : null;
       bad.maxQ = x.maxQ || null;
@@ -748,7 +756,7 @@
   function checkCell(bad) {
     if (bad === null || bad === undefined) return '<td></td>';
     const cyc = bad.cycle ? '<small class="muted">cycle du ' + fmtDay(bad.cycle[0]) + ' au ' + fmtDay(bad.cycle[1]) + '</small><br>' : '';
-    const qt = bad.maxQ ? ' Quota le plus chargé : ' + bad.maxQ.used + ' absence(s) pour un alpha de ' + bad.maxQ.alpha + ' (' + fmtDay(bad.maxQ.date) + ').' : '';
+    const qt = bad.maxQ ? ' Quota le plus chargé : ' + bad.maxQ.used + ' absence(s) sur alpha pour un alpha de ' + bad.maxQ.alpha + (bad.maxQ.onBeta ? ', ' + bad.maxQ.onBeta + ' sur bêta' : '') + ' (' + fmtDay(bad.maxQ.date) + ').' : '';
     if (!bad.length) return '<td class="chk-ok" title="Effectif suffisant, quota d\'absences respecté et chef de tour présent tous les jours de cycle couverts.' + esc(qt) + '">' + cyc + '✓' + (bad.maxQ ? ' <small class="muted">' + bad.maxQ.used + '/' + bad.maxQ.alpha + '</small>' : '') + '</td>';
     const txt = bad.map(function (b) { return fmtDay(b.date) + ' (' + b.role + ') : ' + b.problems.join(', '); });
     return '<td class="chk-bad" title="' + esc(txt.join('\n')) + '">' + cyc + '⚠ ' + esc(txt[0]) + (txt.length > 1 ? ' <small>+' + (txt.length - 1) + ' jour(s)</small>' : '') + '</td>';
@@ -945,6 +953,7 @@
       '<label style="flex:1;min-width:260px">Jours fériés supplémentaires (un par ligne, AAAA-MM-JJ)<textarea id="p-hol" rows="3">' + esc((c.holidays || []).join('\n')) + '</textarea></label></div>' +
       '<p class="muted">Les jours fériés français sont calculés automatiquement ; un férié en semaine utilise la grille « dimanche / férié ». Le cycle (6 jours) est déroulé à partir de la date d\'ancrage et ne change jamais de longueur : en période d\'option, le dernier jour OFF juste avant chaque J1 devient J0.</p></div>';
     h += '<div class="card"><h2 style="margin-top:0">Règles et pondérations</h2><div class="row">' +
+      '<label title="Nombre de contrôleurs de l\'équipe hors renforts, pour les quotas alpha / bêta (vide : compté dans la liste des agents)">Cardinal d\'équipe<input type="number" id="p-card" min="1" value="' + (c.cardinal || '') + '"></label>' +
       '<label>Effectif minimum<input type="number" id="p-min" min="1" value="' + c.minStaff + '"></label>' +
       '<label>Postes de nuit effective (J3)<input type="number" id="p-nights" min="0" value="' + c.nightCount + '"></label>' +
       '<label>Horaire du J0 (lundi-samedi)<input id="p-j0" value="' + esc(c.j0Range) + '"></label>' +
@@ -961,7 +970,7 @@
       '<p class="muted">Les compteurs ne sont jamais remis à zéro au 1er janvier : un retard de fin d\'année (congés en novembre-décembre) se rattrape au début de l\'année suivante, au même rythme plafonné.</p></div>';
     const qTypes = c.quotaTypes || P.DEFAULT_QUOTA_TYPES;
     h += '<div class="card"><h2 style="margin-top:0">Quotas d\'absences et besoin de couverture</h2>' +
-      '<p class="muted">Note de service TDS LFBO 2027, page 9. « Période normale » = période d\'option ; sinon période creuse. Cardinal d\'équipe actuel : <b>' + P.cardinalOf(c) + '</b> agent(s) hors renforts' + ([6, 7, 8].indexOf(P.cardinalOf(c)) < 0 ? ' <span class="warn">(non prévu par la note : pas de contrôle de quota)</span>' : '') + '. Alpha = absences accordables par vacation ; une récup RS peut passer sur bêta s\'il n\'est pas consommé (sauf cardinal 6). BC = besoin de couverture : en dessous, l\'effectif de la vacation est dégradé.</p>' +
+      '<p class="muted">Note de service TDS LFBO 2027, page 9. « Période normale » = période d\'option ; sinon période creuse. Cardinal d\'équipe : <b>' + P.cardinalOf(c) + '</b>' + (c.cardinal ? ' (réglé dans « Règles et pondérations »)' : ' agent(s) hors renforts') + ([6, 7, 8].indexOf(P.cardinalOf(c)) < 0 ? ' <span class="warn">(non prévu par la note : pas de contrôle de quota)</span>' : '') + '. Alpha = absences accordables par vacation ; formations puis récups RS sont décomptées d\'abord sur bêta, le reste sur alpha ; les formations passent avant les RS. Les bêta de 0,66 d\'un même cycle sont mis en commun et arrondis à l\'entier supérieur (2 × 0,66 → 2 places sur le cycle) ; aucune place sur bêta en cardinal 6. BC = besoin de couverture : en dessous, l\'effectif de la vacation est dégradé.</p>' +
       '<div class="row">Types décomptés sur le quota : ' + P.ABSENCE_TYPES.map(function (t) {
         return '<label style="flex-direction:row;align-items:center;gap:4px;color:var(--ink)"><input type="checkbox" data-qt="' + t + '"' + (qTypes.indexOf(t) >= 0 ? ' checked' : '') + '>' + esc(TYPES[t] ? TYPES[t].replace(/ \(valeur.*\)$/, '') : t) + '</label>';
       }).join('') + '</div>' +
@@ -1032,7 +1041,7 @@
       try { qb = JSON.parse($('#p-quotas').value); } catch (err) { throw new Error('quotas / BC : JSON invalide.'); }
       if (!qb.quotas || !qb.quotas.normal || !qb.quotas.creuse || !qb.bc || !qb.bc.normal || !qb.bc.creuse) throw new Error('quotas / BC : il faut « quotas » et « bc », chacun avec « normal » et « creuse ».');
       const quotaTypes = $$('[data-qt]').filter(function (i) { return i.checked; }).map(function (i) { return i.dataset.qt; });
-      Object.assign(c, { quotas: qb.quotas, bc: qb.bc, quotaTypes: quotaTypes, agents: agents, tables: tables, tablesCreuse: tablesCreuse, holidays: hol, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j0RangeSunday: $('#p-j0sun').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
+      Object.assign(c, { quotas: qb.quotas, bc: qb.bc, quotaTypes: quotaTypes, agents: agents, tables: tables, tablesCreuse: tablesCreuse, holidays: hol, cardinal: +$('#p-card').value || 0, minStaff: +$('#p-min').value || 1, nightCount: +$('#p-nights').value || 0, j0Range: $('#p-j0').value.trim(), j0RangeSunday: $('#p-j0sun').value.trim(), j2EarlyMax: j2e, absenceCredit: Math.min(1, Math.max(0, parseFloat($('#p-abscredit').value) || 0)), maxNightsMonth: Math.max(1, +$('#p-maxnights').value || 3), maxN1Month: Math.max(1, +$('#p-maxn1').value || 2), weights: weights });
       c.cycle = { anchor: anchor, normal: normal, optionPeriods: periods };
       state.initial = initial;
       const renamed = old.filter(function (id) { return !seen.has(id); });
