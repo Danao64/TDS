@@ -684,7 +684,11 @@
       });
       h += '<td>' + c.prefOk + ' / ' + c.prefKo + '</td><td>' + c.absDays + '</td></tr>';
     });
-    h += '<tr><td><i>Taux équipe par jour</i></td>' + keys.map(function (k) { return '<td>' + (k === 'days' || k === 'weDays' ? '' : (Math.round(rate(k) * 1000) / 1000)) + '</td>'; }).join('') + '<td></td><td></td></tr>';
+    // Taux moyen par agent : moyenne des agents hors renforts (cumul, et « ce mois » en dessous)
+    const avg = function (k, src) { return reg.length ? reg.reduce(function (s, id) { return s + src[id][k]; }, 0) / reg.length : 0; };
+    h += '<tr class="avg"><td><i>Taux moyen par agent</i></td>' + keys.map(function (k) {
+      return '<td>' + num(avg(k, st.after)) + '<small>ce mois ' + num(avg(k, st.after) - avg(k, st.before)) + '</small></td>';
+    }).join('') + '<td></td><td>' + num(avg('absDays', st.after)) + '</td></tr>';
     el.innerHTML = h + '</tbody></table></div>';
     $('#st-month').onchange = function (e) { ui.statMonth = e.target.value; renderStats(); };
   }

@@ -19,7 +19,7 @@ Application web statique (HTML/JS, sans serveur) pour générer le planning mens
 1. **Paramètres** : trigrammes des agents, renforts, compteurs de départ (saisis à la main), date d'ancrage du cycle, périodes d'option (J0), effectif minimum, pondérations.
 2. **Demandes** : congés, récups, formations, souhaits/évitements, créneaux imposés — saisie ou import CSV/XLSX (modèle téléchargeable).
 3. **Planning** : choisir le mois → *Générer*. Alertes (effectif < minimum…), échange manuel de deux agents (fige tout le mois ❄, conservé à la régénération), export CSV/Excel.
-4. **Statistiques** : cumul par agent (heures, nuits, N1, repas, soirées, nuits WE/férié, J0, jours travaillés) avec écart au taux d'équipe.
+4. **Statistiques** : cumul par agent (heures, nuits, N1, repas, soirées, nuits WE/férié, J0, jours travaillés) avec écart au taux d'équipe ; dernière ligne « Taux moyen par agent » : moyenne de chaque compteur sur les agents hors renforts (cumul, et « ce mois » en dessous).
 5. **Données** : sauvegarde / restauration JSON. Générez les mois dans l'ordre : chaque mois s'appuie sur les compteurs des précédents.
 
 **Types d'absence** (onglet Demandes) :
