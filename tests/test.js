@@ -85,6 +85,45 @@ all.filter(d => d.role === 'J0').forEach(d => {
   else j0n++;
 });
 
+// ---- pas de J0 la veille d'un congé ou d'une récup (règle souple : sinon alerte)
+let j0Leave = 0, j0LeaveOk = 0;
+all.filter(d => d.role === 'J0' && Object.keys(d.assign).length).forEach(d => {
+  const who = Object.keys(d.assign)[0], nd = byDate[P.addDays(d.date, 1)];
+  if (nd && nd.absentType && ['CF', 'CYC', 'RS', 'RMT', 'RPT', 'REC'].includes(nd.absentType[who])) { j0Leave++; assert(d.warnings.some(w => /la veille/.test(w)), 'J0 la veille d\'un congé sans alerte ' + d.date); }
+  else j0LeaveOk++;
+});
+{
+  // cycle 2027-06-06 → 2027-06-11 : J0 le 11/06, J1 le 12/06 ; FAV (le moins de J0, hors N1 du 08/06) est en tête pour le J0
+  const AG = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7'];
+  const at = (days, k) => days.find(d => d.date === k);
+  const n1Of = days => { const d = at(days, '2027-06-08'); return Object.keys(d.assign).find(i => d.assign[i].n1); };
+  const j0Of = days => Object.keys(at(days, '2027-06-11').assign)[0];
+  const base0 = {}; AG.forEach(a => { base0[a] = { j0: 5 }; });
+  const n1Agent = n1Of(P.generateMonth(cfg, [], base0, '2027-06', null, []).days);
+  const FAV = AG.find(a => a !== n1Agent);
+  const base = {}; AG.forEach(a => { base[a] = { j0: a === FAV ? 0 : 5 }; });
+  const gen = (rq, prev) => P.generateMonth(cfg, rq, base, '2027-06', prev || null, []).days;
+  const free = gen([]);
+  assert.strictEqual(n1Of(free), n1Agent, 'N1 indépendante du compteur de J0'); assert.strictEqual(j0Of(free), FAV, FAV + ' attendu au J0 sans contrainte');
+  // récup RS le lendemain : FAV ne fait pas le J0, sans alerte
+  let days = gen([{ agent: FAV, from: '2027-06-12', to: '2027-06-12', type: 'RS' }]), j0 = at(days, '2027-06-11');
+  assert.notStrictEqual(j0Of(days), FAV, 'pas de J0 la veille d\'une récup'); assert.notStrictEqual(j0Of(days), n1Of(days)); assert(!j0.warnings.some(w => /la veille/.test(w)));
+  // souhait J0 de l'agent : il le garde malgré sa récup du lendemain
+  days = gen([{ agent: FAV, from: '2027-06-12', to: '2027-06-12', type: 'RS' }, { agent: FAV, from: '2027-06-11', to: '2027-06-11', type: 'VEUT', value: 'j0' }]);
+  assert.strictEqual(j0Of(days), FAV, 'souhait J0 respecté malgré la récup du lendemain'); assert(!at(days, '2027-06-11').warnings.some(w => /la veille/.test(w)));
+  // tous en congé le lendemain sauf l'agent de la N1 : la règle N1 passe d'abord, alerte « la veille »
+  days = gen(AG.filter(a => a !== n1Agent).map(a => ({ agent: a, from: '2027-06-12', to: '2027-06-12', type: 'CF' })));
+  j0 = at(days, '2027-06-11');
+  assert.strictEqual(n1Of(days), n1Agent); assert.notStrictEqual(j0Of(days), n1Agent, 'la règle N1 prime'); assert(j0.warnings.some(w => /la veille/.test(w)), 'alerte J0 la veille d\'un congé');
+  // J0 figé puis congé posé après coup pour le lendemain : J0 conservé, alerte
+  const frozen = {}; free.forEach(d => { frozen[d.date] = Object.assign({}, d, { frozen: true }); });
+  const j0Who = Object.keys(at(free, '2027-06-11').assign)[0];
+  days = gen([{ agent: j0Who, from: '2027-06-12', to: '2027-06-12', type: 'CF' }], frozen);
+  j0 = at(days, '2027-06-11');
+  assert(j0.assign[j0Who], 'J0 figé conservé'); assert(j0.warnings.some(w => /J0 figé .* la veille/.test(w)), 'alerte J0 figé la veille d\'un congé');
+  console.log('J0 et congés : OK (pas de J0 la veille d\'un congé ou d\'une récup, sauf souhait ; règle N1 prioritaire ; ' + j0Leave + ' exception(s) avec alerte sur ' + (j0Leave + j0LeaveOk) + ' J0 dans l\'année)');
+}
+
 // ---- J2 tôt la veille d'une nuit
 let nightAg = 0, withEarly = 0, planned = 0, planOk = 0;
 all.filter(d => d.role === 'J3').forEach(d => {

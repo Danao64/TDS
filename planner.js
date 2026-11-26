@@ -304,6 +304,8 @@
   };
   function normalizeType(t) { return TYPE_ALIASES[normValue(t)] || null; }
   const ABSENCE_TYPES = ['CF', 'CYC', 'RS', 'RMT', 'RPT', 'REC', 'FORM', 'ABS'];
+  // Congés et récups : pas de J0 la veille (règle souple, Damien 26/11/2026)
+  const LEAVE_TYPES = ['CF', 'CYC', 'RS', 'RMT', 'RPT', 'REC'];
   // Libellé affiché dans le planning (une formation affiche son code, ex. « GB »)
   const ABSENCE_CODE = { CF: 'CF', CYC: 'Cyc', RS: 'RS', RMT: 'RMT', RPT: 'RPT', REC: 'REC', FORM: 'FORM', ABS: 'ABS' };
   function absenceLabel(type, value) {
@@ -626,6 +628,10 @@
             if (a.meal) flag(day, id, 'meal');
             if (avail.indexOf(id) < 0) { day.drift = true; day.warnings.push('Journée figée : ' + id + ' est indisponible d\'après les demandes (vacation conservée).'); }
           });
+          if (role === 'J0') Object.keys(prevF.assign).forEach(function (id) { // J0 figé la veille d'un congé ou d'une récup posé ensuite
+            const key = id + '|' + addDays(k, 1), wish = (idx.prefs.get(id + '|' + k) || []).some(function (p) { return p.type === 'VEUT' && p.value === 'j0'; });
+            if (idx.absent.has(key) && LEAVE_TYPES.indexOf(idx.absType.get(key)) >= 0 && !wish) day.warnings.push('J0 figé de ' + id + ' la veille de son ' + idx.absent.get(key) + ' : à revoir si besoin.');
+          });
           if (role !== 'J0') avail.forEach(function (id) { if (!day.assign[id]) { day.drift = true; day.warnings.push('Journée figée : ' + id + ' est disponible mais n\'a pas de vacation.'); } });
           if (prevF.nextNight) day.nextNight = prevF.nextNight.slice();
           if (prevF.lockedAgents) day.lockedAgents = Object.assign({}, prevF.lockedAgents);
@@ -636,20 +642,25 @@
       if (role === 'J0') {
         const pool0 = avail.filter(function (id) { return !renfortIds.has(id); });
         if (!pool0.length) { day.warnings.push('Aucun agent disponible pour le J0.'); continue; }
-        // Règle : l'agent qui a fait la N1 du J3 de ce cycle ne fait pas le J0 de fin de cycle.
+        const wants = function (id, t) { return (idx.prefs.get(id + '|' + k) || []).some(function (p) { return p.type === t && p.value === 'j0'; }); };
+        // Règles souples, dans cet ordre : (1) l'agent qui a fait la N1 du J3 de ce cycle ne fait pas le J0 de fin
+        // de cycle ; (2) pas de J0 la veille d'un congé ou d'une récup (sauf souhait J0 de l'agent).
         let j3 = null;
         for (let b = 1; b <= 7 && !j3; b++) { const pd = byDate[addDays(k, -b)]; if (pd && pd.role === 'J3') j3 = pd; }
         const n1ids = j3 ? Object.keys(j3.assign).filter(function (id) { return j3.assign[id].n1; }) : [];
+        const nextK = addDays(k, 1);
+        const leaveNext = function (id) { const key = id + '|' + nextK; return idx.absent.has(key) && LEAVE_TYPES.indexOf(idx.absType.get(key)) >= 0 && !wants(id, 'VEUT'); };
         const noN1 = pool0.filter(function (id) { return n1ids.indexOf(id) < 0; });
-        const cands = noN1.length ? noN1 : pool0;
+        const best = noN1.filter(function (id) { return !leaveNext(id); });
+        const cands = best.length ? best : noN1.length ? noN1 : pool0;
         // Souhait J0 = -2, évitement J0 = +2 sur le nombre de J0 déjà faits : la demande est prioritaire
         // tant que l'écart avec l'agent le moins servi reste borné (équité préservée).
-        const wants = function (id, t) { return (idx.prefs.get(id + '|' + k) || []).some(function (p) { return p.type === t && p.value === 'j0'; }); };
         const score = function (id) { return counters[id].j0 + (wants(id, 'VEUT') ? -2 : 0) + (wants(id, 'EVITE') ? 2 : 0); };
         cands.sort(function (a, b) { return score(a) - score(b) || counters[a].hours - counters[b].hours || (a < b ? -1 : 1); });
         const imposed = pool0.filter(function (id) { return idx.fixed.get(id + '|' + k) === 'J0'; });
         const pick = imposed.length ? imposed[0] : cands[0];
         if (n1ids.indexOf(pick) >= 0) day.warnings.push('J0 de ' + pick + ' après sa N1 du ' + j3.date + (imposed.length ? ' (créneau imposé).' : ' (aucun autre agent disponible).'));
+        if (leaveNext(pick)) day.warnings.push('J0 de ' + pick + ' la veille de son ' + idx.absent.get(pick + '|' + nextK) + ' du ' + nextK + (imposed.length ? ' (créneau imposé).' : ' (aucun autre agent disponible).'));
         if (wants(pick, 'EVITE')) day.warnings.push('Évitement J0 non respecté pour ' + pick + ' (pas d\'autre agent disponible ou écart de J0 trop important).');
         applyAssign(day, pick, 'J0', 1, j0RangeFor(cfg, dt));
         continue;
